@@ -16,6 +16,13 @@
       authorizes its use, and the application can then ask for signatures made
       with the matching key.
 
+      The token is usually a smart card reached through a PKCS#11 module — a
+      PIV card, a national eID card, a hardware security key — but it may
+      equally be a TPM or a software key store. This interface names the
+      credential rather than the hardware: what crosses it is a certificate
+      and operations on the key behind it, never a PKCS#11 object, session or
+      token, and never a card reader.
+
       The private key never crosses this interface. Neither does the PIN: the
       backend is responsible for any PIN entry, and no key material, PIN value
       or PIN source ever appears in an argument or a result.
@@ -106,6 +113,24 @@
           ``signing``, ``email`` or ``ssh``. There is deliberately no value
           meaning "anything": the purpose selects the consent wording and
           bounds the operations and mechanisms the grant may be used for.
+
+          ``client_auth``, ``signing`` and ``ssh`` are signing purposes: a
+          certificate matches one of them only if its key will sign. ``email``
+          is not one. S/MIME splits mail between a signing certificate and a
+          decryption certificate, and on a smart card those are separate keys:
+          a PIV "key management" certificate carries ``keyEncipherment``
+          without ``digitalSignature``, and the key behind it will decrypt and
+          never sign. A certificate therefore matches ``email`` when its
+          extended key usage permits ``emailProtection`` — or it carries no
+          extended key usage at all — and its key usage permits **either**
+          ``digitalSignature`` **or** ``keyEncipherment``.
+
+          A certificate that can only decrypt is offered for ``email`` only
+          when ``operation_policy`` permits ``decrypt``, and the
+          ``permitted_operations`` of the resulting grant then holds
+          ``decrypt`` alone. An application asking for ``email`` in order to
+          sign a message should leave ``operation_policy`` at its default,
+          which is ``sign`` only, and will not be offered such a certificate.
 
         * ``certificate_filter`` (``a{sv}``)
 
