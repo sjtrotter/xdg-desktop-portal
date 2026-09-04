@@ -80,6 +80,18 @@
           ``derived_host`` or ``unidentified``. The backend is expected to
           make the difference visible to the user.
 
+        * ``allow_selection_memory`` (``b``)
+
+          Whether the backend may offer the user the choice to reuse this
+          certificate for this application next time. This is the effective
+          value, not the application's request: it is true only if the
+          application asked for it *and* ``app_identity_level`` is not
+          ``unidentified``.
+
+          A backend must not offer selection memory when this is false. The
+          frontend will discard ``remember_selection`` in that case, so an
+          offer made anyway is a promise to the user that nothing will keep.
+
         * ``preselect_certificate`` (``s``)
 
           A stable certificate identifier, remembered from an earlier grant.
@@ -104,7 +116,9 @@
 
         * ``remember_selection`` (``b``)
 
-          Whether the user asked for this selection to be remembered.
+          Whether the user asked for this selection to be remembered. Only
+          meaningful if ``allow_selection_memory`` was true; the frontend
+          ignores it otherwise.
     -->
     <method name="AcquireCredential">
       <arg type="o" name="handle" direction="in"/>

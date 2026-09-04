@@ -104,6 +104,68 @@ class TestCertificate:
         assert "requested_lifetime" not in options
         assert "handle_token" not in options
 
+    def test_selection_memory_is_forwarded(self, portals, dbus_con):
+        """
+        The backend is told the effective value, not what the app asked for,
+        so that it never offers a choice the frontend would discard.
+        """
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+        mock_intf = xdp.get_mock_iface(dbus_con)
+
+        session = create_session(dbus_con, intf)
+        response = acquire_credential(
+            dbus_con,
+            intf,
+            session,
+            options={"purpose": "client_auth", "allow_selection_memory": True},
+        )
+        assert response
+        assert response.response == 0
+
+        _, args = mock_intf.GetMethodCalls("AcquireCredential")[-1]
+        assert args[4]["allow_selection_memory"]
+
+        # And the certificate the backend reported is remembered, so the next
+        # acquisition preselects it
+        session = create_session(dbus_con, intf)
+        response = acquire_credential(
+            dbus_con,
+            intf,
+            session,
+            options={"purpose": "client_auth", "allow_selection_memory": True},
+        )
+        assert response
+        assert response.response == 0
+
+        _, args = mock_intf.GetMethodCalls("AcquireCredential")[-1]
+        assert args[4]["preselect_certificate"] == "cert-1"
+
+    def test_selection_memory_defaults_to_false(self, portals, dbus_con):
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+        mock_intf = xdp.get_mock_iface(dbus_con)
+
+        session = create_session(dbus_con, intf)
+        assert acquire_credential(dbus_con, intf, session).response == 0
+
+        _, args = mock_intf.GetMethodCalls("AcquireCredential")[-1]
+        assert "allow_selection_memory" in args[4]
+        assert not args[4]["allow_selection_memory"]
+
+        # An explicit false is the same thing
+        session = create_session(dbus_con, intf)
+        response = acquire_credential(
+            dbus_con,
+            intf,
+            session,
+            options={"purpose": "client_auth", "allow_selection_memory": False},
+        )
+        assert response
+        assert response.response == 0
+
+        _, args = mock_intf.GetMethodCalls("AcquireCredential")[-1]
+        assert not args[4]["allow_selection_memory"]
+        assert "preselect_certificate" not in args[4]
+
     def test_lifetime_is_clamped(self, portals, dbus_con):
         intf = xdp.get_iface(dbus_con, INTERFACE)
         mock_intf = xdp.get_mock_iface(dbus_con)

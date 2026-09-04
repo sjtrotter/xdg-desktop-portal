@@ -47,6 +47,7 @@ class CertificateParameters:
     response: int
     expect_close: bool
     credential: dict
+    certificate_id: str
     signature: bytes
     plaintext: bytes
     capabilities: dict
@@ -63,6 +64,7 @@ def load(mock, parameters=None):
         response=parameters.get("response", 0),
         expect_close=parameters.get("expect-close", False),
         credential=parameters.get("credential", DEFAULT_CREDENTIAL),
+        certificate_id=parameters.get("certificate_id", "cert-1"),
         signature=parameters.get("signature", b"signature"),
         plaintext=parameters.get("plaintext", b"plaintext"),
         capabilities=parameters.get("capabilities", DEFAULT_CAPABILITIES),
@@ -119,12 +121,18 @@ def AcquireCredential(
 
     request = ImplRequest(self, BUS_NAME, handle, logger, cb_success, cb_error)
 
+    results = dict(params.credential)
+
+    # A well behaved backend only offers to remember the selection when the
+    # frontend said it may, and only then reports that the user asked for it.
+    if options.get("allow_selection_memory", False):
+        results["certificate_id"] = params.certificate_id
+        results["remember_selection"] = True
+
     if params.expect_close:
         request.wait_for_close()
     else:
-        request.respond(
-            Response(params.response, dict(params.credential)), delay=params.delay
-        )
+        request.respond(Response(params.response, results), delay=params.delay)
 
 
 @dbus.service.method(

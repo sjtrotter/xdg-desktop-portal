@@ -554,6 +554,13 @@ acquire_credential_validate_options (XdpAppInfo  *app_info,
   g_variant_builder_add (&options, "{sv}",
                          "app_identity_level",
                          g_variant_new_string (app_identity_level (app_info)));
+  /* Whether the backend may offer to remember the selection at all. The
+   * frontend is the only one that can know: it holds the permission store
+   * and it is the one that applied the identity rule above. A backend that
+   * offers the choice anyway makes a promise nothing here will keep. */
+  g_variant_builder_add (&options, "{sv}",
+                         "allow_selection_memory",
+                         g_variant_new_boolean (allow_selection_memory));
 
   *out_lifetime = lifetime;
   *out_selection_memory = allow_selection_memory;
