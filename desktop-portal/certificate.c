@@ -477,8 +477,21 @@ check_sign_parameters (GVariant  *options,
       return FALSE;
     }
 
-  if (g_variant_lookup (parameters, "signature_encoding", "&s", &encoding) &&
-      !strv_contains (certificate_signature_encodings, encoding))
+  /* PRESENT WITH THE WRONG TYPE IS AN ERROR, NEVER ABSENT.
+   * g_variant_lookup (..., "&s", ...) returns FALSE for a key that is there
+   * holding a uint32, and the caller would then get the default encoding it
+   * did not ask for. 'label' below is already checked this way. */
+  if (!g_variant_lookup (parameters, "signature_encoding", "&s", &encoding) &&
+      xdp_variant_contains_key (parameters, "signature_encoding"))
+    {
+      g_set_error_literal (error,
+                           XDG_DESKTOP_PORTAL_ERROR,
+                           XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                           "Expected type 's' for parameter 'signature_encoding'");
+      return FALSE;
+    }
+
+  if (encoding && !strv_contains (certificate_signature_encodings, encoding))
     {
       g_set_error (error,
                    XDG_DESKTOP_PORTAL_ERROR,
@@ -529,8 +542,17 @@ check_decrypt_parameters (GVariant  *options,
   /* PKCS#1 lets MGF1 use a different hash than OAEP itself. Nothing asks for
    * that on purpose, and the value goes into the module's mechanism
    * parameter, so the two have to agree. */
-  if (g_variant_lookup (parameters, "mgf1_hash", "&s", &mgf1_hash_name) &&
-      certificate_hash_lookup (mgf1_hash_name) != hash)
+  if (!g_variant_lookup (parameters, "mgf1_hash", "&s", &mgf1_hash_name) &&
+      xdp_variant_contains_key (parameters, "mgf1_hash"))
+    {
+      g_set_error_literal (error,
+                           XDG_DESKTOP_PORTAL_ERROR,
+                           XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                           "Expected type 's' for parameter 'mgf1_hash'");
+      return FALSE;
+    }
+
+  if (mgf1_hash_name && certificate_hash_lookup (mgf1_hash_name) != hash)
     {
       g_set_error (error,
                    XDG_DESKTOP_PORTAL_ERROR,

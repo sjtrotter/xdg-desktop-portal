@@ -268,6 +268,30 @@ class TestCertificate:
                 },
                 "signature_encoding",
             ),
+            # present with the wrong type is an error, never absent: it used to
+            # be silently discarded and replaced by the default encoding
+            (
+                {
+                    "mechanism": "ECDSA",
+                    "parameters": dbus.Dictionary(
+                        {"hash": "SHA256", "signature_encoding": dbus.UInt32(1)},
+                        signature="sv",
+                    ),
+                    "data": DIGEST,
+                },
+                "signature_encoding",
+            ),
+            (
+                {
+                    "mechanism": "ECDSA",
+                    "parameters": dbus.Dictionary(
+                        {"hash": "SHA256", "signature_encoding": True},
+                        signature="sv",
+                    ),
+                    "data": DIGEST,
+                },
+                "signature_encoding",
+            ),
             # RSA_OAEP is for Decrypt
             (
                 {
@@ -427,6 +451,27 @@ class TestCertificate:
                     "mechanism": "RSA_OAEP",
                     "parameters": dbus.Dictionary(
                         {"hash": "SHA256", "mgf1_hash": "SHA1"}, signature="sv"
+                    ),
+                },
+                "mgf1_hash",
+            ),
+            # and the same asymmetry on the decrypt side: a mistyped mgf1_hash
+            # meant "no need to check it against hash"
+            (
+                {
+                    "mechanism": "RSA_OAEP",
+                    "parameters": dbus.Dictionary(
+                        {"hash": "SHA256", "mgf1_hash": dbus.UInt32(1)}, signature="sv"
+                    ),
+                },
+                "mgf1_hash",
+            ),
+            (
+                {
+                    "mechanism": "RSA_OAEP",
+                    "parameters": dbus.Dictionary(
+                        {"hash": "SHA256", "mgf1_hash": dbus.ByteArray(b"SHA256")},
+                        signature="sv",
                     ),
                 },
                 "mgf1_hash",
