@@ -243,7 +243,9 @@
         * ``mechanism`` (``s``)
 
           Required. One of the names the grant reported in
-          ``supported_mechanisms``.
+          ``supported_mechanisms``, and one that can sign: ``RSA_PKCS1_V1_5``,
+          ``RSA_PSS`` or ``ECDSA``. ``RSA_OAEP`` is for
+          :ref:`org.freedesktop.portal.experimental.Certificate.Decrypt` only.
 
         * ``parameters`` (``a{sv}``)
 
@@ -287,6 +289,29 @@
         The @options vardict takes the same keys as
         :ref:`org.freedesktop.portal.experimental.Certificate.Sign`, with
         ``ciphertext`` (``ay``) in place of ``data``.
+
+        ``RSA_OAEP`` is the only ``mechanism`` this portal will decrypt with.
+        ``RSA_PKCS1_V1_5`` is a signature mechanism here and nothing else: a
+        v1.5 decryption tells the caller whether the padding was well formed,
+        which is a Bleichenbacher oracle over the private key on the token,
+        and one grant would buy an unbounded number of queries.
+
+        ``RSA_OAEP`` takes these ``parameters``:
+
+        * ``hash`` (``s``)
+
+          Required. One of ``SHA1``, ``SHA224``, ``SHA256``, ``SHA384`` or
+          ``SHA512``; the ``SHA-256`` spelling is accepted too.
+
+        * ``mgf1_hash`` (``s``)
+
+          Optional, and must name the same hash as ``hash``. PKCS#1 allows
+          the two to differ; this interface does not.
+
+        * ``label`` (``ay``)
+
+          Optional OAEP label, at most 256 bytes. It is a domain separator,
+          not a payload.
 
         The following results get returned via the :ref:`org.freedesktop.portal.Request::Response` signal:
 

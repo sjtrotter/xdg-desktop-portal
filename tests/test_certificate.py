@@ -11,6 +11,20 @@ import tests.xdp_utils as xdp
 INTERFACE = "org.freedesktop.portal.experimental.Certificate"
 IMPL_INTERFACE = "org.freedesktop.impl.portal.experimental.Certificate"
 
+# A 32 byte SHA256 digest, which is what Sign takes
+DIGEST = dbus.ByteArray(b"0123456789abcdef0123456789abcdef")
+
+DECRYPTING_CREDENTIAL = dbus.Dictionary(
+    {
+        "certificate_der": dbus.ByteArray(b"certificate"),
+        "key_type": "RSA",
+        "key_size": dbus.UInt32(2048),
+        "supported_mechanisms": dbus.Array(["RSA_PSS", "RSA_OAEP"], signature="s"),
+        "permitted_operations": dbus.Array(["sign", "decrypt"], signature="s"),
+    },
+    signature="sv",
+)
+
 
 @pytest.fixture
 def required_templates():
@@ -245,12 +259,138 @@ class TestCertificate:
                 session_handle=session.handle,
                 parent_window="",
                 options={
-                    "mechanism": "ECDSA",
+                    "mechanism": "RSA_OAEP",
+                    "parameters": dbus.Dictionary({"hash": "SHA256"}, signature="sv"),
                     "ciphertext": dbus.ByteArray(b"ciphertext"),
                 },
             )
 
-        assert "decrypt" in str(excinfo.value)
+        assert "does not permit" in str(excinfo.value)
+        assert len(mock_intf.GetMethodCalls("Decrypt")) == 0
+
+    @pytest.mark.parametrize(
+        "template_params",
+        ({"certificate": {"credential": DECRYPTING_CREDENTIAL}},),
+    )
+    def test_decrypt_oaep(self, portals, dbus_con):
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+        mock_intf = xdp.get_mock_iface(dbus_con)
+
+        session = create_session(dbus_con, intf)
+        assert acquire_credential(dbus_con, intf, session).response == 0
+
+        request = xdp.Request(dbus_con, intf)
+        response = request.call(
+            "Decrypt",
+            session_handle=session.handle,
+            parent_window="",
+            options={
+                "mechanism": "RSA_OAEP",
+                "parameters": dbus.Dictionary(
+                    {
+                        "hash": "SHA-256",
+                        "mgf1_hash": "SHA256",
+                        "label": dbus.ByteArray(b"label"),
+                    },
+                    signature="sv",
+                ),
+                "ciphertext": dbus.ByteArray(b"ciphertext"),
+            },
+        )
+
+        assert response
+        assert response.response == 0
+        assert bytes(response.results["plaintext"]) == b"plaintext"
+
+        _, args = mock_intf.GetMethodCalls("Decrypt")[-1]
+        assert args[4]["mechanism"] == "RSA_OAEP"
+
+    @pytest.mark.parametrize(
+        "template_params",
+        ({"certificate": {"credential": DECRYPTING_CREDENTIAL}},),
+    )
+    @pytest.mark.parametrize(
+        "options,error_fragment",
+        [
+            # PKCS#1 v1.5 decryption is a padding oracle over the card key
+            (
+                {
+                    "mechanism": "RSA_PKCS1_V1_5",
+                    "parameters": dbus.Dictionary({"hash": "SHA256"}, signature="sv"),
+                },
+                "may not be used to decrypt",
+            ),
+            (
+                {
+                    "mechanism": "RSA_PSS",
+                    "parameters": dbus.Dictionary({"hash": "SHA256"}, signature="sv"),
+                },
+                "decrypt",
+            ),
+            ({"mechanism": "RSA_OAEP"}, "hash"),
+            (
+                {
+                    "mechanism": "RSA_OAEP",
+                    "parameters": dbus.Dictionary({}, signature="sv"),
+                },
+                "hash",
+            ),
+            (
+                {
+                    "mechanism": "RSA_OAEP",
+                    "parameters": dbus.Dictionary({"hash": "MD5"}, signature="sv"),
+                },
+                "MD5",
+            ),
+            (
+                {
+                    "mechanism": "RSA_OAEP",
+                    "parameters": dbus.Dictionary(
+                        {"hash": "SHA256", "mgf1_hash": "SHA1"}, signature="sv"
+                    ),
+                },
+                "mgf1_hash",
+            ),
+            (
+                {
+                    "mechanism": "RSA_OAEP",
+                    "parameters": dbus.Dictionary(
+                        {"hash": "SHA256", "label": dbus.ByteArray(b"x" * 257)},
+                        signature="sv",
+                    ),
+                },
+                "label",
+            ),
+            (
+                {
+                    "mechanism": "RSA_OAEP",
+                    "parameters": dbus.Dictionary(
+                        {"hash": "SHA256", "label": dbus.UInt32(1)}, signature="sv"
+                    ),
+                },
+                "label",
+            ),
+        ],
+    )
+    def test_decrypt_invalid_option_rejected(
+        self, portals, dbus_con, options, error_fragment
+    ):
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+        mock_intf = xdp.get_mock_iface(dbus_con)
+
+        session = create_session(dbus_con, intf)
+        assert acquire_credential(dbus_con, intf, session).response == 0
+
+        request = xdp.Request(dbus_con, intf)
+        with pytest.raises(dbus.exceptions.DBusException) as excinfo:
+            request.call(
+                "Decrypt",
+                session_handle=session.handle,
+                parent_window="",
+                options=dict(options, ciphertext=dbus.ByteArray(b"ciphertext")),
+            )
+
+        assert error_fragment in str(excinfo.value)
         assert len(mock_intf.GetMethodCalls("Decrypt")) == 0
 
     @pytest.mark.parametrize(

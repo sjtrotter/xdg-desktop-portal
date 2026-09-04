@@ -49,9 +49,65 @@ static const char * const certificate_operations[] = {
 static const char * const certificate_mechanisms[] = {
   "RSA_PKCS1_V1_5",
   "RSA_PSS",
+  "RSA_OAEP",
   "ECDSA",
   NULL,
 };
+
+static const char * const certificate_sign_mechanisms[] = {
+  "RSA_PKCS1_V1_5",
+  "RSA_PSS",
+  "ECDSA",
+  NULL,
+};
+
+/* PKCS#1 v1.5 decryption is a Bleichenbacher oracle over the card's key: the
+ * caller learns from the response alone whether the padding was well formed,
+ * and can recover a plaintext, or forge a signature, one query at a time.
+ * There is no rate limit here that would make that safe, so v1.5 is a signing
+ * mechanism only and OAEP is the only way to decrypt. */
+static const char * const certificate_decrypt_mechanisms[] = {
+  "RSA_OAEP",
+  NULL,
+};
+
+/* The digest sizes are the point rather than a detail: 'data' is a digest of
+ * the named hash, so its length is not a free parameter, and a caller that
+ * cannot name the hash is not signing a digest. */
+typedef struct _CertificateHash
+{
+  const char *name;
+  size_t digest_size;
+} CertificateHash;
+
+static const CertificateHash certificate_hashes[] = {
+  { "SHA1", 20 },
+  { "SHA224", 28 },
+  { "SHA256", 32 },
+  { "SHA384", 48 },
+  { "SHA512", 64 },
+};
+
+static const CertificateHash *
+certificate_hash_lookup (const char *name)
+{
+  if (!name)
+    return NULL;
+
+  for (size_t i = 0; i < G_N_ELEMENTS (certificate_hashes); i++)
+    {
+      /* "SHA-256" and "SHA256" are both in wide use; refusing one of the two
+       * spellings is a papercut, not a check. */
+      g_autofree char *dashed =
+        g_strdup_printf ("SHA-%s", certificate_hashes[i].name + 3);
+
+      if (g_ascii_strcasecmp (name, certificate_hashes[i].name) == 0 ||
+          g_ascii_strcasecmp (name, dashed) == 0)
+        return &certificate_hashes[i];
+    }
+
+  return NULL;
+}
 
 static const char * const certificate_interaction_modes[] = {
   "required",
@@ -267,14 +323,11 @@ validate_reason (const char  *key,
 }
 
 static gboolean
-validate_mechanism (const char  *key,
-                    GVariant    *value,
-                    GVariant    *options,
-                    gpointer     user_data,
-                    GError     **error)
+validate_operation_mechanism (const char          *mechanism,
+                              const char * const  *allowed,
+                              const char          *operation,
+                              GError             **error)
 {
-  const char *mechanism = g_variant_get_string (value, NULL);
-
   if (!strv_contains (certificate_mechanisms, mechanism))
     {
       g_set_error (error,
@@ -284,7 +337,41 @@ validate_mechanism (const char  *key,
       return FALSE;
     }
 
+  if (!strv_contains (allowed, mechanism))
+    {
+      g_set_error (error,
+                   XDG_DESKTOP_PORTAL_ERROR,
+                   XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                   "The mechanism '%s' may not be used to %s",
+                   mechanism, operation);
+      return FALSE;
+    }
+
   return TRUE;
+}
+
+static gboolean
+validate_sign_mechanism (const char  *key,
+                         GVariant    *value,
+                         GVariant    *options,
+                         gpointer     user_data,
+                         GError     **error)
+{
+  return validate_operation_mechanism (g_variant_get_string (value, NULL),
+                                       certificate_sign_mechanisms,
+                                       "sign", error);
+}
+
+static gboolean
+validate_decrypt_mechanism (const char  *key,
+                            GVariant    *value,
+                            GVariant    *options,
+                            gpointer     user_data,
+                            GError     **error)
+{
+  return validate_operation_mechanism (g_variant_get_string (value, NULL),
+                                       certificate_decrypt_mechanisms,
+                                       "decrypt", error);
 }
 
 static gboolean
@@ -319,16 +406,92 @@ static XdpOptionKey acquire_credential_options[] = {
 };
 
 static XdpOptionKey sign_options[] = {
-  { "mechanism", G_VARIANT_TYPE_STRING, validate_mechanism },
+  { "mechanism", G_VARIANT_TYPE_STRING, validate_sign_mechanism },
   { "parameters", G_VARIANT_TYPE_VARDICT, NULL },
   { "data", G_VARIANT_TYPE_BYTESTRING, validate_data },
 };
 
 static XdpOptionKey decrypt_options[] = {
-  { "mechanism", G_VARIANT_TYPE_STRING, validate_mechanism },
+  { "mechanism", G_VARIANT_TYPE_STRING, validate_decrypt_mechanism },
   { "parameters", G_VARIANT_TYPE_VARDICT, NULL },
   { "ciphertext", G_VARIANT_TYPE_BYTESTRING, validate_data },
 };
+
+/* An OAEP label is a domain separator, not a payload. */
+#define CERTIFICATE_MAX_LABEL_SIZE 256
+
+/* RSA_OAEP is the only decryption mechanism, and its parameters decide what
+ * the card is asked to do, so they are checked here rather than forwarded and
+ * hoped about. The backend checks them again against the key. */
+static gboolean
+check_decrypt_parameters (GVariant  *options,
+                          GError   **error)
+{
+  g_autoptr(GVariant) parameters = NULL;
+  g_autoptr(GVariant) label = NULL;
+  const CertificateHash *hash;
+  const char *hash_name = NULL;
+  const char *mgf1_hash_name = NULL;
+
+  parameters = g_variant_lookup_value (options, "parameters",
+                                       G_VARIANT_TYPE_VARDICT);
+
+  if (!parameters ||
+      !g_variant_lookup (parameters, "hash", "&s", &hash_name))
+    {
+      g_set_error_literal (error,
+                           XDG_DESKTOP_PORTAL_ERROR,
+                           XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                           "RSA_OAEP needs a 'hash' parameter");
+      return FALSE;
+    }
+
+  hash = certificate_hash_lookup (hash_name);
+  if (!hash)
+    {
+      g_set_error (error,
+                   XDG_DESKTOP_PORTAL_ERROR,
+                   XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                   "Unknown hash '%s'", hash_name);
+      return FALSE;
+    }
+
+  /* PKCS#1 lets MGF1 use a different hash than OAEP itself. Nothing asks for
+   * that on purpose, and the value goes into the module's mechanism
+   * parameter, so the two have to agree. */
+  if (g_variant_lookup (parameters, "mgf1_hash", "&s", &mgf1_hash_name) &&
+      certificate_hash_lookup (mgf1_hash_name) != hash)
+    {
+      g_set_error (error,
+                   XDG_DESKTOP_PORTAL_ERROR,
+                   XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                   "The 'mgf1_hash' must name the same hash as 'hash', "
+                   "not '%s'", mgf1_hash_name);
+      return FALSE;
+    }
+
+  label = g_variant_lookup_value (parameters, "label",
+                                  G_VARIANT_TYPE_BYTESTRING);
+  if (!label && xdp_variant_contains_key (parameters, "label"))
+    {
+      g_set_error_literal (error,
+                           XDG_DESKTOP_PORTAL_ERROR,
+                           XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                           "Expected type 'ay' for parameter 'label'");
+      return FALSE;
+    }
+
+  if (label && g_variant_get_size (label) > CERTIFICATE_MAX_LABEL_SIZE)
+    {
+      g_set_error_literal (error,
+                           XDG_DESKTOP_PORTAL_ERROR,
+                           XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                           "Not accepting an overly large 'label'");
+      return FALSE;
+    }
+
+  return TRUE;
+}
 
 static void
 on_session_closed (XdpSessionDex *session,
@@ -854,6 +1017,13 @@ handle_key_operation (XdpDbusExperimentalCertificate *object,
                                              XDG_DESKTOP_PORTAL_ERROR,
                                              XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
                                              "No '%s' given", data_key);
+      return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
+  if (!is_sign && !check_decrypt_parameters (options, &error))
+    {
+      g_dbus_method_invocation_return_gerror (g_steal_pointer (&invocation),
+                                              error);
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 

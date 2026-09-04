@@ -180,6 +180,18 @@
         :ref:`org.freedesktop.impl.portal.experimental.Certificate.Sign`, with
         ``ciphertext`` (``ay``) in place of ``data``. The @results vardict
         carries ``plaintext`` (``ay``).
+
+        ``mechanism`` is always ``RSA_OAEP``: the frontend refuses every other
+        value for this method, and in particular refuses ``RSA_PKCS1_V1_5``,
+        because a v1.5 decryption whose outcome the caller can observe is a
+        Bleichenbacher oracle over the token's private key. A backend must not
+        implement v1.5 decryption behind some other mechanism name either.
+
+        The frontend has checked that ``parameters`` names a ``hash`` it
+        knows, that ``mgf1_hash``, if present, names the same one, and that
+        ``label``, if present, is at most 256 bytes. The backend still checks
+        the parameters against the key, in particular that the ciphertext is
+        exactly one modulus long.
     -->
     <method name="Decrypt">
       <arg type="o" name="handle" direction="in"/>
