@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import dbus
 import dbus.service
+from dbusmock import MOCK_IFACE
 
 from tests.templates.xdp_utils import ImplRequest, ImplSession, Response, init_logger
 
@@ -194,3 +195,25 @@ def GetCapabilities(self, app_id, options):
     logger.debug(f"GetCapabilities({app_id}, {options})")
 
     return dbus.Dictionary(self.certificate_params.capabilities, signature="sv")
+
+
+@dbus.service.method(
+    MOCK_IFACE,
+    in_signature="a{sv}",
+    out_signature="",
+)
+def AddToken(self, token):
+    logger.debug(f"AddToken({token})")
+
+    self.EmitSignal(MAIN_IFACE, "TokenAdded", "a{sv}", [token])
+
+
+@dbus.service.method(
+    MOCK_IFACE,
+    in_signature="a{sv}",
+    out_signature="",
+)
+def RemoveToken(self, token):
+    logger.debug(f"RemoveToken({token})")
+
+    self.EmitSignal(MAIN_IFACE, "TokenRemoved", "a{sv}", [token])

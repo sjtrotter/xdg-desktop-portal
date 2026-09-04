@@ -1166,15 +1166,43 @@ handle_get_capabilities (XdpDbusExperimentalCertificate *object,
   return G_DBUS_METHOD_INVOCATION_HANDLED;
 }
 
+/* The token signals are broadcast: every client on the session bus receives
+ * them, sandboxed or not, before anything has been consented to. So they say
+ * that a token is there, and nothing about whose it is. A token label is
+ * routinely the cardholder's name or an employee number, and the reader name
+ * names the hardware; both stay in the AcquireCredential results, which only
+ * an application that was granted a credential ever sees. */
+static GVariant *
+token_presence (GVariant *token)
+{
+  g_auto(GVariantBuilder) builder =
+    G_VARIANT_BUILDER_INIT (G_VARIANT_TYPE_VARDICT);
+  const char *token_id = NULL;
+  gboolean protected_authentication_path = FALSE;
+
+  if (g_variant_lookup (token, "token_id", "&s", &token_id))
+    g_variant_builder_add (&builder, "{sv}",
+                           "token_id", g_variant_new_string (token_id));
+
+  if (g_variant_lookup (token, "protected_authentication_path", "b",
+                        &protected_authentication_path))
+    g_variant_builder_add (&builder, "{sv}",
+                           "protected_authentication_path",
+                           g_variant_new_boolean (protected_authentication_path));
+
+  return g_variant_ref_sink (g_variant_builder_end (&builder));
+}
+
 static void
 on_impl_token_added (XdpDbusExperimentalImplCertificate *impl,
                      GVariant                           *token,
                      gpointer                            user_data)
 {
   XdpCertificate *certificate = XDP_CERTIFICATE (user_data);
+  g_autoptr(GVariant) presence = token_presence (token);
 
   xdp_dbus_experimental_certificate_emit_token_added (
-    XDP_DBUS_EXPERIMENTAL_CERTIFICATE (certificate), token);
+    XDP_DBUS_EXPERIMENTAL_CERTIFICATE (certificate), presence);
 }
 
 static void
@@ -1183,9 +1211,10 @@ on_impl_token_removed (XdpDbusExperimentalImplCertificate *impl,
                        gpointer                            user_data)
 {
   XdpCertificate *certificate = XDP_CERTIFICATE (user_data);
+  g_autoptr(GVariant) presence = token_presence (token);
 
   xdp_dbus_experimental_certificate_emit_token_removed (
-    XDP_DBUS_EXPERIMENTAL_CERTIFICATE (certificate), token);
+    XDP_DBUS_EXPERIMENTAL_CERTIFICATE (certificate), presence);
 }
 
 static void

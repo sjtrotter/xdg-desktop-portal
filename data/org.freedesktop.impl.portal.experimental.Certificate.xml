@@ -217,9 +217,34 @@
 
     <!--
         TokenAdded:
-        @token: Vardict describing the token, for display
+        @token: Vardict saying that a token is present
 
         Emitted when a security token becomes available.
+
+        The frontend re-emits this as
+        :ref:`org.freedesktop.portal.experimental.Certificate::TokenAdded`,
+        which is a broadcast to every client on the session bus. It therefore
+        forwards only:
+
+        * ``token_id`` (``s``)
+
+          An opaque, stable identifier for the token. It must be stable for as
+          long as the token is present, must match the ``token_id`` of the
+          matching ``TokenRemoved``, and must not be derivable from the card:
+          a serial number, or a hash of one that another party can recompute,
+          is a correlation handle across applications and is not acceptable
+          here.
+
+        * ``protected_authentication_path`` (``b``)
+
+          Whether the PIN for this token is entered on the reader.
+
+        Every other key is dropped. A backend must not put the token label,
+        manufacturer, model or reader name on this signal even though the
+        frontend would discard them: those belong in ``token_display`` in the
+        :ref:`org.freedesktop.impl.portal.experimental.Certificate.AcquireCredential`
+        results, which reach only the application that was granted a
+        credential.
     -->
     <signal name="TokenAdded">
       <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QVariantMap"/>
@@ -228,9 +253,11 @@
 
     <!--
         TokenRemoved:
-        @token: Vardict describing the token, for display
+        @token: Vardict saying that a token is gone
 
-        Emitted when a security token goes away.
+        Emitted when a security token goes away. The @token vardict has the
+        same shape, and the same restrictions, as on
+        :ref:`org.freedesktop.impl.portal.experimental.Certificate::TokenAdded`.
     -->
     <signal name="TokenRemoved">
       <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QVariantMap"/>

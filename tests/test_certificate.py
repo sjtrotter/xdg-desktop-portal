@@ -391,6 +391,45 @@ class TestCertificate:
         # Releasing a grant which is already gone succeeds
         intf.ReleaseGrant(session.handle)
 
+    def test_token_signals_carry_no_identity(self, portals, dbus_con):
+        """
+        The public token signals are a broadcast, so they say that a token is
+        there and nothing about whose it is.
+        """
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+        mock_intf = xdp.get_mock_iface(dbus_con)
+
+        added = []
+        removed = []
+
+        intf.connect_to_signal("TokenAdded", added.append)
+        intf.connect_to_signal("TokenRemoved", removed.append)
+
+        token = dbus.Dictionary(
+            {
+                "token_id": "opaque-1",
+                "protected_authentication_path": True,
+                "label": "DOE.JANE.A.1234567890",
+                "manufacturer": "Example Corp",
+                "model": "PIV",
+                "reader": "Example Corp Reader 00 00",
+            },
+            signature="sv",
+        )
+
+        mock_intf.AddToken(token)
+        xdp.wait_for(lambda: len(added) == 1)
+
+        assert set(added[0].keys()) == {"token_id", "protected_authentication_path"}
+        assert added[0]["token_id"] == "opaque-1"
+        assert added[0]["protected_authentication_path"]
+
+        mock_intf.RemoveToken(token)
+        xdp.wait_for(lambda: len(removed) == 1)
+
+        assert set(removed[0].keys()) == {"token_id", "protected_authentication_path"}
+        assert removed[0]["token_id"] == "opaque-1"
+
     def test_get_capabilities(self, portals, dbus_con):
         intf = xdp.get_iface(dbus_con, INTERFACE)
 

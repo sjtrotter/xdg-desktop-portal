@@ -394,9 +394,34 @@
 
     <!--
         TokenAdded:
-        @token: Vardict describing the token, for display
+        @token: Vardict saying that a token is present
 
         Emitted when a security token becomes available.
+
+        This signal is a broadcast: it is delivered to every client that
+        subscribes to it, before anything has been consented to. It therefore
+        carries no human-identifying data. The @token vardict contains:
+
+        * ``token_id`` (``s``)
+
+          An opaque, stable identifier for the token, for correlating an
+          ``added`` with the matching ``removed``. It is not a hardware
+          identifier and cannot be used to look a token up anywhere else.
+
+        * ``protected_authentication_path`` (``b``)
+
+          Whether the PIN for this token is entered on the reader.
+
+        The token label, manufacturer, model and reader name are deliberately
+        not here: a token label is routinely the cardholder's name or an
+        employee number. The full ``token_display`` vardict is returned by
+        :ref:`org.freedesktop.portal.experimental.Certificate.AcquireCredential`,
+        so only an application that was granted a credential sees it.
+
+        Open item: the signal is still broadcast to every subscriber rather
+        than only to applications that hold a session or a stored permission
+        for this portal. Per-recipient delivery needs directed signals, which
+        the portal frontend has no machinery for yet.
     -->
     <signal name="TokenAdded">
       <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QVariantMap"/>
@@ -405,9 +430,11 @@
 
     <!--
         TokenRemoved:
-        @token: Vardict describing the token, for display
+        @token: Vardict saying that a token is gone
 
-        Emitted when a security token goes away.
+        Emitted when a security token goes away. The @token vardict has the
+        same shape, and the same restrictions, as on
+        :ref:`org.freedesktop.portal.experimental.Certificate::TokenAdded`.
     -->
     <signal name="TokenRemoved">
       <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QVariantMap"/>
