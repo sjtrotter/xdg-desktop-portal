@@ -336,6 +336,31 @@ xdp_session_dex_is_closed (XdpSessionDex *session)
   return !session->exported;
 }
 
+void
+xdp_session_dex_close (XdpSessionDex *session,
+                       gboolean       notify_closed)
+{
+  g_auto(GVariantBuilder) details_builder =
+    G_VARIANT_BUILDER_INIT (G_VARIANT_TYPE_VARDICT);
+
+  g_return_if_fail (XDP_IS_SESSION_DEX (session));
+
+  if (!session->exported)
+    return;
+
+  if (notify_closed)
+    xdp_dbus_session_emit_closed (XDP_DBUS_SESSION (session),
+                                  g_variant_builder_end (&details_builder));
+
+  g_dbus_interface_skeleton_unexport (G_DBUS_INTERFACE_SKELETON (session));
+  session->exported = FALSE;
+  xdp_context_unclaim_object_path (session->context, session->id);
+
+  xdp_dbus_impl_session_call_close (session->impl_session, NULL, NULL, NULL);
+
+  xdp_session_dex_emit_closed (session);
+}
+
 XdpAppInfo *
 xdp_session_dex_get_app_info (XdpSessionDex *session)
 {
