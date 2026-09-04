@@ -1,0 +1,244 @@
+<?xml version="1.0"?>
+<!--
+ SPDX-License-Identifier: LGPL-2.1-or-later
+ SPDX-FileCopyrightText: Copyright © the xdg-desktop-portal contributors
+-->
+
+<node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
+  <!--
+      org.freedesktop.impl.portal.experimental.Certificate:
+      @short_description: Backend for the portal for certificates on security tokens
+
+      This backend interface drives the certificate chooser, the consent
+      dialog and any PIN entry, and performs the private key operations
+      against the token.
+
+      The private key never crosses this interface, and neither does the PIN.
+      The backend is told what the frontend already decided: the grant
+      lifetime here is the lifetime the frontend allows, not the one the
+      application asked for, and the identity level of ``app_id`` is stated
+      explicitly so that the backend can show the user how much the name can
+      be trusted.
+
+      This is an **experimental** interface and can change or get removed
+      without a version bump.
+  -->
+  <interface name="org.freedesktop.impl.portal.experimental.Certificate">
+    <!--
+        CreateSession:
+        @handle: Object path for the :ref:`org.freedesktop.impl.portal.Request` object representing this call
+        @session_handle: Object path for the :ref:`org.freedesktop.impl.portal.Session` object
+        @app_id: App ID of the application
+        @options: Vardict with optional further information
+        @response: Numeric response
+        @results: Vardict with the results of the call
+
+        Creates an empty grant session. The @options vardict is currently
+        unused, and the @results vardict is currently empty.
+    -->
+    <method name="CreateSession">
+      <arg type="o" name="handle" direction="in"/>
+      <arg type="o" name="session_handle" direction="in"/>
+      <arg type="s" name="app_id" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In3" value="QVariantMap"/>
+      <arg type="a{sv}" name="options" direction="in"/>
+      <arg type="u" name="response" direction="out"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out1" value="QVariantMap"/>
+      <arg type="a{sv}" name="results" direction="out"/>
+    </method>
+
+    <!--
+        AcquireCredential:
+        @handle: Object path for the :ref:`org.freedesktop.impl.portal.Request` object representing this call
+        @session_handle: Object path for the :ref:`org.freedesktop.impl.portal.Session` object
+        @app_id: App ID of the application
+        @parent_window: Identifier for the application window, see :doc:`window-identifiers`
+        @options: Vardict with optional further information
+        @response: Numeric response
+        @results: Vardict with the results of the call
+
+        Lets the user select a certificate and authorize its use.
+
+        Supported keys in the @options vardict include:
+
+        * ``purpose`` (``s``), ``certificate_filter`` (``a{sv}``),
+          ``operation_policy`` (``a{sv}``), ``interaction_mode`` (``s``),
+          ``activation_token`` (``s``) and ``reason`` (``s``)
+
+          As on :ref:`org.freedesktop.portal.experimental.Certificate.AcquireCredential`.
+          They have been validated by the frontend; an unknown value never
+          reaches the backend.
+
+        * ``lifetime`` (``u``)
+
+          The number of seconds the frontend has decided to allow. This is not
+          the application's request: the ceiling has already been applied.
+
+        * ``app_identity_level`` (``s``)
+
+          How much the @app_id can be trusted: ``verified_sandboxed``,
+          ``derived_host`` or ``unidentified``. The backend is expected to
+          make the difference visible to the user.
+
+        * ``preselect_certificate`` (``s``)
+
+          A stable certificate identifier, remembered from an earlier grant.
+          This preselects only: consent and PIN entry still happen.
+
+        The following results get returned via the @results vardict:
+
+        * ``certificate_der`` (``ay``), ``chain_der`` (``aay``),
+          ``chain_status`` (``s``), ``token_display`` (``a{sv}``),
+          ``key_type`` (``s``), ``key_size`` (``u``), ``key_curve`` (``s``),
+          ``supported_mechanisms`` (``as``), ``permitted_operations``
+          (``as``), ``may_prompt_later`` (``b``)
+
+          As on the public interface. The frontend intersects
+          ``supported_mechanisms`` and ``permitted_operations`` with what it
+          allows; a backend that returns more than it may does not get more.
+
+        * ``certificate_id`` (``s``)
+
+          A stable identifier for the selected certificate. The frontend
+          decides whether to store it for selection memory.
+
+        * ``remember_selection`` (``b``)
+
+          Whether the user asked for this selection to be remembered.
+    -->
+    <method name="AcquireCredential">
+      <arg type="o" name="handle" direction="in"/>
+      <arg type="o" name="session_handle" direction="in"/>
+      <arg type="s" name="app_id" direction="in"/>
+      <arg type="s" name="parent_window" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In4" value="QVariantMap"/>
+      <arg type="a{sv}" name="options" direction="in"/>
+      <arg type="u" name="response" direction="out"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out1" value="QVariantMap"/>
+      <arg type="a{sv}" name="results" direction="out"/>
+    </method>
+
+    <!--
+        Sign:
+        @handle: Object path for the :ref:`org.freedesktop.impl.portal.Request` object representing this call
+        @session_handle: Object path for the :ref:`org.freedesktop.impl.portal.Session` object
+        @app_id: App ID of the application
+        @parent_window: Identifier for the application window, see :doc:`window-identifiers`
+        @options: Vardict with optional further information
+        @response: Numeric response
+        @results: Vardict with the results of the call
+
+        Signs data with the key of the granted certificate.
+
+        Supported keys in the @options vardict are ``mechanism`` (``s``),
+        ``parameters`` (``a{sv}``) and ``data`` (``ay``), as on the public
+        interface. The frontend has already checked that the grant permits the
+        operation and the mechanism; the backend still validates the
+        parameters against the mechanism and the key.
+
+        The @results vardict carries ``signature`` (``ay``).
+    -->
+    <method name="Sign">
+      <arg type="o" name="handle" direction="in"/>
+      <arg type="o" name="session_handle" direction="in"/>
+      <arg type="s" name="app_id" direction="in"/>
+      <arg type="s" name="parent_window" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In4" value="QVariantMap"/>
+      <arg type="a{sv}" name="options" direction="in"/>
+      <arg type="u" name="response" direction="out"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out1" value="QVariantMap"/>
+      <arg type="a{sv}" name="results" direction="out"/>
+    </method>
+
+    <!--
+        Decrypt:
+        @handle: Object path for the :ref:`org.freedesktop.impl.portal.Request` object representing this call
+        @session_handle: Object path for the :ref:`org.freedesktop.impl.portal.Session` object
+        @app_id: App ID of the application
+        @parent_window: Identifier for the application window, see :doc:`window-identifiers`
+        @options: Vardict with optional further information
+        @response: Numeric response
+        @results: Vardict with the results of the call
+
+        Decrypts data with the key of the granted certificate.
+
+        The @options vardict takes the same keys as
+        :ref:`org.freedesktop.impl.portal.experimental.Certificate.Sign`, with
+        ``ciphertext`` (``ay``) in place of ``data``. The @results vardict
+        carries ``plaintext`` (``ay``).
+    -->
+    <method name="Decrypt">
+      <arg type="o" name="handle" direction="in"/>
+      <arg type="o" name="session_handle" direction="in"/>
+      <arg type="s" name="app_id" direction="in"/>
+      <arg type="s" name="parent_window" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In4" value="QVariantMap"/>
+      <arg type="a{sv}" name="options" direction="in"/>
+      <arg type="u" name="response" direction="out"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out1" value="QVariantMap"/>
+      <arg type="a{sv}" name="results" direction="out"/>
+    </method>
+
+    <!--
+        GetCapabilities:
+        @app_id: App ID of the application
+        @options: Vardict with optional further information
+        @capabilities: Vardict describing what the backend can do
+
+        Reports what the backend can do. No window is shown.
+
+        The @capabilities vardict contains ``purposes`` (``as``),
+        ``operations`` (``as``), ``mechanisms`` (``as``),
+        ``protected_authentication_path`` (``b``) and ``has_display`` (``b``).
+        The frontend intersects this with its own policy before answering the
+        application, and adds the keys that are its own to decide.
+    -->
+    <method name="GetCapabilities">
+      <arg type="s" name="app_id" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In1" value="QVariantMap"/>
+      <arg type="a{sv}" name="options" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QVariantMap"/>
+      <arg type="a{sv}" name="capabilities" direction="out"/>
+    </method>
+
+    <!--
+        TokenAdded:
+        @token: Vardict describing the token, for display
+
+        Emitted when a security token becomes available.
+    -->
+    <signal name="TokenAdded">
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QVariantMap"/>
+      <arg type="a{sv}" name="token"/>
+    </signal>
+
+    <!--
+        TokenRemoved:
+        @token: Vardict describing the token, for display
+
+        Emitted when a security token goes away.
+    -->
+    <signal name="TokenRemoved">
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QVariantMap"/>
+      <arg type="a{sv}" name="token"/>
+    </signal>
+
+    <!--
+        SessionInvalidated:
+        @session_handle: Object path of the affected session
+        @reason: Why the session can no longer be used
+
+        Emitted when the backend can no longer honour a grant. @reason is one
+        of ``token_removed``, ``device_error`` or ``backend_shutdown``. The
+        frontend turns this into
+        :ref:`org.freedesktop.portal.experimental.Certificate::GrantInvalidated`
+        and closes the session.
+    -->
+    <signal name="SessionInvalidated">
+      <arg type="o" name="session_handle"/>
+      <arg type="s" name="reason"/>
+    </signal>
+
+    <property name="version" type="u" access="read"/>
+  </interface>
+</node>
