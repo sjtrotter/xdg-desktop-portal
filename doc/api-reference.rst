@@ -65,3 +65,14 @@ replacement will be documented in :doc:`org.freedesktop.host.portal.Registry
    doc-org.freedesktop.portal.Trash.rst
    doc-org.freedesktop.portal.Usb.rst
    doc-org.freedesktop.portal.Wallpaper.rst
+
+Experimental portals are only available when they are explicitly enabled with
+the ``XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL`` environment variable. They are
+not covered by the usual stability promises: they can change or get removed
+without a version bump.
+
+.. toctree::
+   :hidden:
+
+   doc-org.freedesktop.portal.experimental.Certificate.rst
+   doc-org.freedesktop.portal.experimental.WebAuthentication.rst

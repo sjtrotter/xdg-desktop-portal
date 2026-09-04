@@ -36,3 +36,13 @@ accessible to sandboxed applications.
    doc-org.freedesktop.impl.portal.Settings.rst
    doc-org.freedesktop.impl.portal.Usb.rst
    doc-org.freedesktop.impl.portal.Wallpaper.rst
+
+Backends for experimental portals are only used when the portal they belong to
+is enabled with the ``XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL`` environment
+variable.
+
+.. toctree::
+   :hidden:
+
+   doc-org.freedesktop.impl.portal.experimental.Certificate.rst
+   doc-org.freedesktop.impl.portal.experimental.WebAuthentication.rst
