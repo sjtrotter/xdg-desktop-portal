@@ -31,6 +31,12 @@ typedef struct _XdpDbusImplAccess XdpDbusImplAccess;
 #define DESKTOP_DBUS_IMPL_IFACE "org.freedesktop.impl.portal"
 #define DESKTOP_DBUS_PATH "/org/freedesktop/portal/desktop"
 
+/* Experimental portals live in their own namespace, are not exported by
+ * default, and can change or disappear without a version bump. See
+ * xdp_context_is_experimental_enabled(). */
+#define DESKTOP_EXPERIMENTAL_DBUS_IFACE DESKTOP_DBUS_IFACE ".experimental"
+#define DESKTOP_EXPERIMENTAL_DBUS_IMPL_IFACE DESKTOP_DBUS_IMPL_IFACE ".experimental"
+
 #define ACCESS_DBUS_IMPL_IFACE DESKTOP_DBUS_IMPL_IFACE ".Access"
 
 #define LOCKDOWN_DBUS_IMPL_IFACE DESKTOP_DBUS_IMPL_IFACE ".Lockdown"

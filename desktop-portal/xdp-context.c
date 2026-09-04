@@ -373,6 +373,41 @@ on_peer_disconnect (const char *name,
                                                           name));
 }
 
+/* Experimental portals are not exported unless they are explicitly asked for
+ * with XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL, a comma separated list of
+ * experimental portal names, or "all".
+ *
+ * Experimental portals live in the org.freedesktop.portal.experimental
+ * namespace, are not covered by the usual stability promises, and can change
+ * or get removed without a version bump.
+ */
+gboolean
+xdp_context_is_experimental_enabled (const char *name)
+{
+  const char *env;
+  g_auto(GStrv) names = NULL;
+
+  g_return_val_if_fail (name != NULL, FALSE);
+
+  env = g_getenv ("XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL");
+  if (env == NULL || *env == '\0')
+    return FALSE;
+
+  names = g_strsplit (env, ",", -1);
+  for (size_t i = 0; names[i]; i++)
+    {
+      const char *candidate = g_strstrip (names[i]);
+
+      if (g_ascii_strcasecmp (candidate, "all") == 0)
+        return TRUE;
+
+      if (g_ascii_strcasecmp (candidate, name) == 0)
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
 static void
 init_portal_in_fiber (XdpContext   *context,
                       DexFiberFunc  portal_init_func)
