@@ -44,6 +44,7 @@
 #include "xdp-portal-config.h"
 #include "xdp-request.h"
 #include "xdp-session-persistence.h"
+#include "xdp-types.h"
 #include "xdp-utils.h"
 
 enum
@@ -303,6 +304,7 @@ xdp_context_take_and_export_portal (XdpContext             *context,
   g_autoptr(GDBusInterfaceSkeleton) skeleton = skeleton_;
   g_autoptr(GError) error = NULL;
   const char *name;
+  const char *object_path;
 
   g_return_if_fail (XDP_IS_CONTEXT (context));
   g_return_if_fail (G_IS_DBUS_INTERFACE_SKELETON (skeleton));
@@ -341,9 +343,17 @@ xdp_context_take_and_export_portal (XdpContext             *context,
         }
     }
 
+  if (flags & XDP_CONTEXT_EXPORT_FLAGS_EXPERIMENTAL)
+    {
+      object_path = DESKTOP_EXPERIMENTAL_DBUS_PATH;
+    }
+  else
+    {
+        object_path = DESKTOP_DBUS_PATH;
+    }
   if (g_dbus_interface_skeleton_export (skeleton,
                                         context->connection,
-                                        DESKTOP_DBUS_PATH,
+                                        object_path,
                                         &error))
     g_debug ("Providing portal %s", name);
   else
