@@ -259,8 +259,21 @@
             ``SHA256``, ``SHA384`` or ``SHA512``; the ``SHA-256`` spelling is
             accepted too.
 
-          ``RSA_PSS`` additionally takes ``mgf`` (``s``) and ``salt_length``
-          (``u``), which the backend checks against the modulus.
+          ``RSA_PSS`` additionally takes:
+
+          * ``mgf`` (``s``)
+
+            The mask generation function, spelled ``MGF1-<hash>`` — for
+            example ``MGF1-SHA256``. Plain ``MGF1`` means MGF1 over ``hash``,
+            which is also the default when the key is absent. PKCS#1 allows
+            MGF1 to use a different hash than the signature; nothing here
+            needs that.
+
+          * ``salt_length`` (``u``)
+
+            The salt length in bytes, defaulting to the digest's length. The
+            backend checks it against the modulus, which is the only place the
+            modulus size is known.
 
           ``ECDSA`` additionally takes:
 
