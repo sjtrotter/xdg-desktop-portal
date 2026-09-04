@@ -148,7 +148,21 @@
         ``parameters`` (``a{sv}``) and ``data`` (``ay``), as on the public
         interface. The frontend has already checked that the grant permits the
         operation and the mechanism; the backend still validates the
-        parameters against the mechanism and the key.
+        parameters against the mechanism and the key, which is the only place
+        the modulus size is known.
+
+        ``data`` is always a digest, never a message. The frontend requires a
+        ``hash`` parameter naming one of ``SHA1``, ``SHA224``, ``SHA256``,
+        ``SHA384`` or ``SHA512``, and refuses a ``data`` whose length is not
+        that digest's length. A backend must not accept a ``data`` of some
+        other length, and must not offer a mechanism that signs a message.
+
+        For ``ECDSA``, ``parameters`` may carry ``signature_encoding``
+        (``s``), which the frontend validates as ``raw`` or ``der``. ``raw``
+        is the default and means r and s concatenated, each padded to the byte
+        length of the curve order — what PKCS#11 produces. ``der`` means the
+        ``Ecdsa-Sig-Value`` SEQUENCE of RFC 3279. A backend that implements
+        ECDSA must implement both, and must default to ``raw``.
 
         The @results vardict carries ``signature`` (``ay``).
     -->
@@ -281,11 +295,16 @@
         @session_handle: Object path of the affected session
         @reason: Why the session can no longer be used
 
-        Emitted when the backend can no longer honour a grant. @reason is one
-        of ``token_removed``, ``device_error`` or ``backend_shutdown``. The
-        frontend turns this into
+        Emitted when the backend can no longer honour a grant.
+
+        The frontend turns this into
         :ref:`org.freedesktop.portal.experimental.Certificate::GrantInvalidated`
-        and closes the session.
+        and closes the session. It forwards @reason verbatim, so the
+        vocabulary here is the public one and not a smaller list: ``released``,
+        ``expired``, ``token_removed``, ``owner_gone``, ``policy``,
+        ``service_shutdown``, ``backend_gone`` or ``error``. A backend that
+        invents a value hands it straight to applications, which is why it
+        should not.
     -->
     <signal name="SessionInvalidated">
       <arg type="o" name="session_handle"/>

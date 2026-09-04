@@ -214,7 +214,10 @@ class TestCertificate:
             parent_window="",
             options={
                 "mechanism": "ECDSA",
-                "data": dbus.ByteArray(b"digest"),
+                "parameters": dbus.Dictionary(
+                    {"hash": "SHA256", "signature_encoding": "der"}, signature="sv"
+                ),
+                "data": DIGEST,
                 "operation_id": "op-1",
             },
         )
@@ -223,6 +226,79 @@ class TestCertificate:
         assert response.response == 0
         assert bytes(response.results["signature"]) == b"signature"
         assert response.results["operation_id"] == "op-1"
+
+    @pytest.mark.parametrize(
+        "options,error_fragment",
+        [
+            # 'data' is a digest, so the portal has to be told which one
+            ({"mechanism": "ECDSA", "data": DIGEST}, "hash"),
+            (
+                {
+                    "mechanism": "ECDSA",
+                    "parameters": dbus.Dictionary({"hash": "MD5"}, signature="sv"),
+                    "data": DIGEST,
+                },
+                "MD5",
+            ),
+            # and a digest has exactly one length
+            (
+                {
+                    "mechanism": "ECDSA",
+                    "parameters": dbus.Dictionary({"hash": "SHA512"}, signature="sv"),
+                    "data": DIGEST,
+                },
+                "digest",
+            ),
+            (
+                {
+                    "mechanism": "ECDSA",
+                    "parameters": dbus.Dictionary({"hash": "SHA256"}, signature="sv"),
+                    "data": dbus.ByteArray(b"a message, not a digest"),
+                },
+                "digest",
+            ),
+            (
+                {
+                    "mechanism": "ECDSA",
+                    "parameters": dbus.Dictionary(
+                        {"hash": "SHA256", "signature_encoding": "asn1"},
+                        signature="sv",
+                    ),
+                    "data": DIGEST,
+                },
+                "signature_encoding",
+            ),
+            # RSA_OAEP is for Decrypt
+            (
+                {
+                    "mechanism": "RSA_OAEP",
+                    "parameters": dbus.Dictionary({"hash": "SHA256"}, signature="sv"),
+                    "data": DIGEST,
+                },
+                "may not be used to sign",
+            ),
+        ],
+    )
+    def test_sign_invalid_option_rejected(
+        self, portals, dbus_con, options, error_fragment
+    ):
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+        mock_intf = xdp.get_mock_iface(dbus_con)
+
+        session = create_session(dbus_con, intf)
+        assert acquire_credential(dbus_con, intf, session).response == 0
+
+        request = xdp.Request(dbus_con, intf)
+        with pytest.raises(dbus.exceptions.DBusException) as excinfo:
+            request.call(
+                "Sign",
+                session_handle=session.handle,
+                parent_window="",
+                options=options,
+            )
+
+        assert error_fragment in str(excinfo.value)
+        assert len(mock_intf.GetMethodCalls("Sign")) == 0
 
     def test_sign_without_grant_is_refused(self, portals, dbus_con):
         intf = xdp.get_iface(dbus_con, INTERFACE)
@@ -236,7 +312,11 @@ class TestCertificate:
                 "Sign",
                 session_handle=session.handle,
                 parent_window="",
-                options={"mechanism": "ECDSA", "data": dbus.ByteArray(b"digest")},
+                options={
+                    "mechanism": "ECDSA",
+                    "parameters": dbus.Dictionary({"hash": "SHA256"}, signature="sv"),
+                    "data": DIGEST,
+                },
             )
 
         assert "credential" in str(excinfo.value)
@@ -435,7 +515,8 @@ class TestCertificate:
                 parent_window="",
                 options={
                     "mechanism": "MAGIC_BEANS",
-                    "data": dbus.ByteArray(b"digest"),
+                    "parameters": dbus.Dictionary({"hash": "SHA256"}, signature="sv"),
+                    "data": DIGEST,
                 },
             )
 

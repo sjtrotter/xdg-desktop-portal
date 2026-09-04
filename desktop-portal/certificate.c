@@ -420,6 +420,76 @@ static XdpOptionKey decrypt_options[] = {
 /* An OAEP label is a domain separator, not a payload. */
 #define CERTIFICATE_MAX_LABEL_SIZE 256
 
+static const char * const certificate_signature_encodings[] = {
+  "raw",
+  "der",
+  NULL,
+};
+
+/* What keeps Sign from being a general signing oracle is that 'data' is a
+ * digest and nothing else: the caller names the hash, and the length has to
+ * agree with it, so no structure the caller chose can be signed whole. The
+ * backend enforces this too, but it is a property of the interface rather
+ * than of one backend, so it is enforced here as well. */
+static gboolean
+check_sign_parameters (GVariant  *options,
+                       GError   **error)
+{
+  g_autoptr(GVariant) parameters = NULL;
+  g_autoptr(GVariant) data = NULL;
+  const CertificateHash *hash;
+  const char *hash_name = NULL;
+  const char *encoding = NULL;
+
+  parameters = g_variant_lookup_value (options, "parameters",
+                                       G_VARIANT_TYPE_VARDICT);
+
+  if (!parameters ||
+      !g_variant_lookup (parameters, "hash", "&s", &hash_name))
+    {
+      g_set_error_literal (error,
+                           XDG_DESKTOP_PORTAL_ERROR,
+                           XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                           "A 'hash' parameter is required: 'data' is a "
+                           "digest, and the portal has to know which one");
+      return FALSE;
+    }
+
+  hash = certificate_hash_lookup (hash_name);
+  if (!hash)
+    {
+      g_set_error (error,
+                   XDG_DESKTOP_PORTAL_ERROR,
+                   XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                   "Unknown hash '%s'", hash_name);
+      return FALSE;
+    }
+
+  data = g_variant_lookup_value (options, "data", G_VARIANT_TYPE_BYTESTRING);
+  if (data && g_variant_get_size (data) != hash->digest_size)
+    {
+      g_set_error (error,
+                   XDG_DESKTOP_PORTAL_ERROR,
+                   XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                   "The 'data' must be a %s digest of %" G_GSIZE_FORMAT
+                   " bytes, not %" G_GSIZE_FORMAT,
+                   hash->name, hash->digest_size, g_variant_get_size (data));
+      return FALSE;
+    }
+
+  if (g_variant_lookup (parameters, "signature_encoding", "&s", &encoding) &&
+      !strv_contains (certificate_signature_encodings, encoding))
+    {
+      g_set_error (error,
+                   XDG_DESKTOP_PORTAL_ERROR,
+                   XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                   "Unknown signature_encoding '%s'", encoding);
+      return FALSE;
+    }
+
+  return TRUE;
+}
+
 /* RSA_OAEP is the only decryption mechanism, and its parameters decide what
  * the card is asked to do, so they are checked here rather than forwarded and
  * hoped about. The backend checks them again against the key. */
@@ -1020,7 +1090,8 @@ handle_key_operation (XdpDbusExperimentalCertificate *object,
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
-  if (!is_sign && !check_decrypt_parameters (options, &error))
+  if (is_sign ? !check_sign_parameters (options, &error)
+              : !check_decrypt_parameters (options, &error))
     {
       g_dbus_method_invocation_return_gerror (g_steal_pointer (&invocation),
                                               error);

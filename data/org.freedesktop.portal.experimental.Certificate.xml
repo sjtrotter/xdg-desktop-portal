@@ -249,13 +249,36 @@
 
         * ``parameters`` (``a{sv}``)
 
-          Whatever the mechanism needs, for instance the hash, mask generation
-          function and salt length for RSA-PSS. Validated against the mechanism
-          and the key rather than passed through.
+          Whatever the mechanism needs. Validated against the mechanism and
+          the key rather than passed through. Every signature mechanism here
+          takes:
+
+          * ``hash`` (``s``)
+
+            Required. Which digest ``data`` is. One of ``SHA1``, ``SHA224``,
+            ``SHA256``, ``SHA384`` or ``SHA512``; the ``SHA-256`` spelling is
+            accepted too.
+
+          ``RSA_PSS`` additionally takes ``mgf`` (``s``) and ``salt_length``
+          (``u``), which the backend checks against the modulus.
+
+          ``ECDSA`` additionally takes:
+
+          * ``signature_encoding`` (``s``)
+
+            ``raw`` (the default): the signature is r and s concatenated,
+            each padded to the byte length of the curve order, which is what
+            PKCS#11 produces and what most callers want. ``der``: the
+            signature is the ``Ecdsa-Sig-Value`` SEQUENCE of RFC 3279.
 
         * ``data`` (``ay``)
 
-          Required. The digest or the message, as the mechanism requires.
+          Required. The digest of the message under the ``hash`` named in
+          ``parameters``, and never the message itself. Its length must be
+          exactly that digest's length; a request whose ``data`` is a
+          different length is refused. This is what keeps ``Sign`` from being
+          a general signing oracle for the key on the token: the application
+          cannot get a structure of its own choosing signed whole.
 
         The following results get returned via the :ref:`org.freedesktop.portal.Request::Response` signal:
 
