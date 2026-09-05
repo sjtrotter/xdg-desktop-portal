@@ -41,6 +41,7 @@ portal_sources = files(
   'org.freedesktop.portal.Trash.xml',
   'org.freedesktop.portal.Usb.xml',
   'org.freedesktop.portal.Wallpaper.xml',
+  'org.freedesktop.portal.WebAuthentication.X1.xml',
 )
 
 portal_host_sources = files(
@@ -73,6 +74,7 @@ portal_impl_sources = files(
   'org.freedesktop.impl.portal.Settings.xml',
   'org.freedesktop.impl.portal.Usb.xml',
   'org.freedesktop.impl.portal.Wallpaper.xml',
+  'org.freedesktop.impl.portal.WebAuthentication.X1.xml',
 )
 
 background_monitor_sources = files(

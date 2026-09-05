@@ -36,6 +36,7 @@
 #include "trash.h"
 #include "usb.h"
 #include "wallpaper.h"
+#include "web-authentication.h"
 #include "xdp-app-info-registry.h"
 #include "xdp-dbus.h"
 #include "xdp-documents.h"
@@ -516,6 +517,7 @@ xdp_context_register (XdpContext       *context,
 #endif
   init_registry (context);
   init_portal_in_fiber (context, init_certificate);
+  init_portal_in_fiber (context, init_web_authentication);
 
   await_pending_inits (context);
 
