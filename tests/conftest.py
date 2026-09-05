@@ -222,6 +222,7 @@ def xdg_desktop_portal_dir_default_files() -> dict[str, bytes]:
         "org.freedesktop.impl.portal.Settings",
         "org.freedesktop.impl.portal.Usb",
         "org.freedesktop.impl.portal.Wallpaper",
+        "org.freedesktop.impl.portal.WebAuthentication.X1",
     ]
 
     files["test-portals.conf"] = b"""

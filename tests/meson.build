@@ -113,6 +113,7 @@ tests = {
   'trash': {},
   'usb': {'enabled': have_gudev},
   'wallpaper': {},
+  'webauthentication': {},
 }
 
 template_files = [
@@ -138,6 +139,7 @@ template_files = [
   'templates/settings.py',
   'templates/usb.py',
   'templates/wallpaper.py',
+  'templates/webauthentication.py',
   'templates/xdp_utils.py',
 ]
 
