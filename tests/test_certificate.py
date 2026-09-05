@@ -3,6 +3,8 @@
 #
 # This file is formatted with Python Black
 
+import time
+
 import dbus
 import pytest
 
@@ -655,6 +657,12 @@ class TestCertificate:
         # Renewal is decided in the frontend, the backend is never asked
         assert len(mock_intf.GetMethodCalls("RenewGrant")) == 0
 
+        # Renewal never moves the consent's absolute deadline, so the expiry
+        # it hands back stays inside it.
+        capabilities = intf.GetCapabilities({})
+        acquired_at = response.results["expires_at"] - 300
+        assert expires_at <= acquired_at + capabilities["max_grant_total_lifetime"]
+
         intf.ReleaseGrant(session.handle)
         # Releasing a grant which is already gone succeeds
         intf.ReleaseGrant(session.handle)
@@ -708,7 +716,58 @@ class TestCertificate:
         # Intersected with the portal's own allow list, in its order
         assert list(capabilities["mechanisms"]) == ["RSA_PSS", "ECDSA"]
         assert capabilities["max_grant_lifetime"] == 3600
+        # Eight renewals' worth: one consent, one working day, and no longer
+        assert capabilities["max_grant_total_lifetime"] == 8 * 3600
         assert capabilities["selection_memory"]
+
+
+class TestCertificateConsentDeadline:
+    """
+    RenewGrant sets the expiry relative to now, so an absolute deadline is the
+    only thing that stops a caller keeping one consent alive forever. The
+    deadline is eight hours in a real portal; here it is two seconds, so that
+    the refusal can be observed.
+    """
+
+    @pytest.fixture
+    def xdp_overwrite_env(self):
+        return {
+            "XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL": "certificate",
+            "XDG_DESKTOP_PORTAL_TEST_CERTIFICATE_MAX_TOTAL_LIFETIME": "2",
+        }
+
+    def test_capabilities_report_the_deadline(self, portals, dbus_con):
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+
+        assert intf.GetCapabilities({})["max_grant_total_lifetime"] == 2
+
+    def test_initial_expiry_is_clamped_to_the_deadline(self, portals, dbus_con):
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+
+        session = create_session(dbus_con, intf)
+        response = acquire_credential(dbus_con, intf, session)
+        assert response
+        assert response.response == 0
+
+        now = int(time.time())
+        # The default lifetime is 300 s; the deadline is 2 s and wins
+        assert response.results["expires_at"] <= now + 2
+
+    def test_renewal_is_refused_after_the_deadline(self, portals, dbus_con):
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+
+        session = create_session(dbus_con, intf)
+        response = acquire_credential(dbus_con, intf, session)
+        assert response
+        assert response.response == 0
+
+        time.sleep(2.5)
+
+        with pytest.raises(dbus.exceptions.DBusException) as excinfo:
+            intf.RenewGrant(session.handle, {"requested_lifetime": dbus.UInt32(600)})
+
+        assert "NotAllowed" in excinfo.value.get_dbus_name()
+        assert "total lifetime" in str(excinfo.value)
 
 
 class TestCertificateExperimentalGate:

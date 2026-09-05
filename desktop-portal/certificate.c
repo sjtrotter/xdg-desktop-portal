@@ -25,6 +25,25 @@
 #define CERTIFICATE_DEFAULT_GRANT_LIFETIME 300
 #define CERTIFICATE_MAX_GRANT_LIFETIME 3600
 
+/* And renewal has an end. RenewGrant sets the expiry relative to now, so
+ * without an absolute deadline a caller renewing every few minutes keeps one
+ * consent alive forever. Eight hours from the moment the user consented, which
+ * is eight times the per-renewal ceiling and one working day. */
+#define CERTIFICATE_MAX_GRANT_TOTAL_LIFETIME (8 * CERTIFICATE_MAX_GRANT_LIFETIME)
+
+static uint32_t
+certificate_max_total_lifetime (void)
+{
+  const char *env =
+    g_getenv ("XDG_DESKTOP_PORTAL_TEST_CERTIFICATE_MAX_TOTAL_LIFETIME");
+  uint64_t seconds;
+
+  if (env && g_ascii_string_to_unsigned (env, 10, 1, G_MAXUINT32, &seconds, NULL))
+    return (uint32_t) seconds;
+
+  return CERTIFICATE_MAX_GRANT_TOTAL_LIFETIME;
+}
+
 /* Signing or decrypting a whole file through the bus is not what this is for. */
 #define CERTIFICATE_MAX_DATA_SIZE (1024 * 1024)
 
@@ -123,6 +142,9 @@ typedef struct _CertificateGrant
   gboolean acquired;
   char *grant_id;
   uint64_t expires_at;
+  /* The absolute end of this consent. Set once, when the user consented, and
+   * never moved by RenewGrant. */
+  uint64_t consent_deadline;
   GStrv permitted_operations;
   GStrv supported_mechanisms;
 } CertificateGrant;
@@ -998,9 +1020,13 @@ handle_acquire_credential (XdpDbusExperimentalCertificate *object,
           strv_intersect (certificate_operations,
                           (const char * const *) reported_operations);
 
-        grant->acquired = TRUE;
-        grant->expires_at =
-          (uint64_t) (g_get_real_time () / G_USEC_PER_SEC) + lifetime;
+        {
+          uint64_t now = (uint64_t) (g_get_real_time () / G_USEC_PER_SEC);
+
+          grant->acquired = TRUE;
+          grant->consent_deadline = now + certificate_max_total_lifetime ();
+          grant->expires_at = MIN (now + lifetime, grant->consent_deadline);
+        }
         g_clear_pointer (&grant->grant_id, g_free);
         grant->grant_id = g_uuid_string_random ();
 
@@ -1312,6 +1338,22 @@ handle_renew_grant (XdpDbusExperimentalCertificate *object,
     }
 
   grant = g_hash_table_lookup (certificate->grants, arg_session_handle);
+
+  /* Before the ordinary checks, because the expiry a passed deadline produces
+   * would otherwise report itself as "expired" — which invites another
+   * renewal. A renewal past the deadline is refused rather than clamped: the
+   * caller has to acquire a credential again, which means asking the user. */
+  if (grant && grant->acquired &&
+      (uint64_t) (g_get_real_time () / G_USEC_PER_SEC) >= grant->consent_deadline)
+    {
+      g_dbus_method_invocation_return_error_literal (
+        g_steal_pointer (&invocation),
+        XDG_DESKTOP_PORTAL_ERROR,
+        XDG_DESKTOP_PORTAL_ERROR_NOT_ALLOWED,
+        "The grant has reached the maximum total lifetime of its consent");
+      return G_DBUS_METHOD_INVOCATION_HANDLED;
+    }
+
   if (!check_grant (grant, NULL, NULL, &error))
     {
       g_dbus_method_invocation_return_gerror (g_steal_pointer (&invocation),
@@ -1320,7 +1362,8 @@ handle_renew_grant (XdpDbusExperimentalCertificate *object,
     }
 
   grant->expires_at =
-    (uint64_t) (g_get_real_time () / G_USEC_PER_SEC) + lifetime;
+    MIN ((uint64_t) (g_get_real_time () / G_USEC_PER_SEC) + lifetime,
+         grant->consent_deadline);
 
   xdp_dbus_experimental_certificate_complete_renew_grant (
     object,
@@ -1421,6 +1464,8 @@ handle_get_capabilities (XdpDbusExperimentalCertificate *object,
                          g_variant_new_boolean (protected_authentication_path));
   g_variant_builder_add (&capabilities, "{sv}", "max_grant_lifetime",
                          g_variant_new_uint32 (CERTIFICATE_MAX_GRANT_LIFETIME));
+  g_variant_builder_add (&capabilities, "{sv}", "max_grant_total_lifetime",
+                         g_variant_new_uint32 (certificate_max_total_lifetime ()));
 
   xdp_dbus_experimental_certificate_complete_get_capabilities (
     object,

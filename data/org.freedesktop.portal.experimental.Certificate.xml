@@ -412,6 +412,19 @@
         if the grant is gone, if the token that backs it went away, or if the
         caller is not the connection that owns the grant.
 
+        **Renewal is bounded in total, not only per renewal.** The consent the
+        user gave at
+        :ref:`org.freedesktop.portal.experimental.Certificate.AcquireCredential`
+        carries an absolute deadline — ``max_grant_total_lifetime`` seconds
+        after the moment it was given, reported by
+        :ref:`org.freedesktop.portal.experimental.Certificate.GetCapabilities`
+        — which renewal never moves. A renewal made before the deadline is
+        clamped to it; a renewal made after it fails with
+        ``org.freedesktop.portal.Error.NotAllowed``, and the only way on is a
+        fresh ``AcquireCredential``, which asks the user again. Without this a
+        caller renewing every few minutes would keep one consent alive
+        indefinitely, which is not what a consent duration means.
+
         The @options vardict currently takes:
 
         * ``requested_lifetime`` (``u``)
@@ -419,7 +432,8 @@
           How much longer, in seconds, the application would like the grant to
           live. As with
           :ref:`org.freedesktop.portal.experimental.Certificate.AcquireCredential`
-          this is a ceiling request.
+          this is a ceiling request, and it is clamped to the consent's
+          absolute deadline as well as to ``max_grant_lifetime``.
     -->
     <method name="RenewGrant">
       <arg type="o" name="session_handle" direction="in"/>
@@ -478,6 +492,15 @@
         * ``max_grant_lifetime`` (``u``)
 
           The longest grant lifetime, in seconds, this portal will hand out.
+
+        * ``max_grant_total_lifetime`` (``u``)
+
+          How long one consent can be kept alive by renewal, in seconds,
+          counted from the moment
+          :ref:`org.freedesktop.portal.experimental.Certificate.AcquireCredential`
+          succeeded. Once it has passed,
+          :ref:`org.freedesktop.portal.experimental.Certificate.RenewGrant`
+          fails and only a fresh acquisition, with its own consent, will do.
     -->
     <method name="GetCapabilities">
       <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="QVariantMap"/>
