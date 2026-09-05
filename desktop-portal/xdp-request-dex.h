@@ -26,4 +26,6 @@ void xdp_request_dex_emit_response (XdpRequestDex                *request,
                                     XdgDesktopPortalResponseEnum  response,
                                     GVariant                     *results);
 
+gboolean xdp_request_dex_is_closed (XdpRequestDex *request);
+
 const char * xdp_request_dex_get_object_path (XdpRequestDex *request);
