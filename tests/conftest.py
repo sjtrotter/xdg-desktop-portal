@@ -205,6 +205,7 @@ def xdg_desktop_portal_dir_default_files() -> dict[str, bytes]:
         "org.freedesktop.impl.portal.Account",
         "org.freedesktop.impl.portal.AppChooser",
         "org.freedesktop.impl.portal.Background",
+        "org.freedesktop.impl.portal.Certificate.X1",
         "org.freedesktop.impl.portal.Clipboard",
         "org.freedesktop.impl.portal.DynamicLauncher",
         "org.freedesktop.impl.portal.Email",

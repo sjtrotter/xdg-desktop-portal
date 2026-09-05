@@ -29,6 +29,10 @@ _counter = count()
 
 ASV = dict[str, Any]
 
+DESKTOP_OBJECT_PATH = "/org/freedesktop/portal/desktop"
+# Experimental portals are exported here instead
+DESKTOP_EXPERIMENTAL_OBJECT_PATH = DESKTOP_OBJECT_PATH + "/experimental"
+
 
 def init_logger(name: str) -> logging.Logger:
     """
@@ -181,18 +185,23 @@ def portal_interface_name(portal_name: str, domain: str | None = None) -> str:
 
 
 def get_portal_iface(
-    bus: dbus.Bus, name: str, domain: str | None = None
+    bus: dbus.Bus,
+    name: str,
+    domain: str | None = None,
+    object_path: str = DESKTOP_OBJECT_PATH,
 ) -> dbus.Interface:
     """
     Returns the dbus interface for a portal name.
     """
     name = portal_interface_name(name, domain)
-    return get_iface(bus, name)
+    return get_iface(bus, name, object_path)
 
 
-def get_iface(bus: dbus.Bus, name: str) -> dbus.Interface:
+def get_iface(
+    bus: dbus.Bus, name: str, object_path: str = DESKTOP_OBJECT_PATH
+) -> dbus.Interface:
     """
-    Returns a named interface of the main portal object.
+    Returns a named interface of a portal object.
     """
     try:
         ifaces = bus._xdp_portal_ifaces
@@ -200,35 +209,45 @@ def get_iface(bus: dbus.Bus, name: str) -> dbus.Interface:
         ifaces = bus._xdp_portal_ifaces = {}
 
     try:
-        intf = ifaces[name]
+        intf = ifaces[(object_path, name)]
     except KeyError:
-        intf = dbus.Interface(get_xdp_dbus_object(bus), name)
+        intf = dbus.Interface(get_xdp_dbus_object(bus, object_path), name)
         assert intf
-        ifaces[name] = intf
+        ifaces[(object_path, name)] = intf
     return intf
 
 
-def get_xdp_dbus_object(bus: dbus.Bus) -> dbus.proxies.ProxyObject:
+def get_xdp_dbus_object(
+    bus: dbus.Bus, object_path: str = DESKTOP_OBJECT_PATH
+) -> dbus.proxies.ProxyObject:
     """
-    Returns the main portal object.
+    Returns a portal object.
     """
     try:
-        obj = bus._xdp_dbus_object
+        objects = bus._xdp_dbus_objects
     except AttributeError:
-        obj = bus.get_object(
-            "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop"
-        )
+        objects = bus._xdp_dbus_objects = {}
+
+    try:
+        obj = objects[object_path]
+    except KeyError:
+        obj = bus.get_object("org.freedesktop.portal.Desktop", object_path)
         assert obj
-        bus._xdp_dbus_object = obj
+        objects[object_path] = obj
     return obj
 
 
-def check_version(bus: dbus.Bus, portal_name: str, expected_version: int):
+def check_version(
+    bus: dbus.Bus,
+    portal_name: str,
+    expected_version: int,
+    object_path: str = DESKTOP_OBJECT_PATH,
+):
     """
     Checks that the portal_name portal version is equal to expected_version.
     """
     properties_intf = dbus.Interface(
-        get_xdp_dbus_object(bus), "org.freedesktop.DBus.Properties"
+        get_xdp_dbus_object(bus, object_path), "org.freedesktop.DBus.Properties"
     )
     portal_iface_name = portal_interface_name(portal_name)
     try:
