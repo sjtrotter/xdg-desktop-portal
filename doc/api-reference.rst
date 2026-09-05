@@ -36,6 +36,7 @@ replacement will be documented in :doc:`org.freedesktop.host.portal.Registry
    doc-org.freedesktop.portal.Account.rst
    doc-org.freedesktop.portal.Background.rst
    doc-org.freedesktop.portal.Camera.rst
+   doc-org.freedesktop.portal.Certificate.X1.rst
    doc-org.freedesktop.portal.Clipboard.rst
    doc-org.freedesktop.portal.Documents.rst
    doc-org.freedesktop.portal.DynamicLauncher.rst

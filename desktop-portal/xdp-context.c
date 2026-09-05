@@ -9,6 +9,7 @@
 #include "account.h"
 #include "background.h"
 #include "camera.h"
+#include "certificate.h"
 #include "clipboard.h"
 #include "dynamic-launcher.h"
 #include "email.h"
@@ -514,6 +515,7 @@ xdp_context_register (XdpContext       *context,
   init_usb (context);
 #endif
   init_registry (context);
+  init_portal_in_fiber (context, init_certificate);
 
   await_pending_inits (context);
 
