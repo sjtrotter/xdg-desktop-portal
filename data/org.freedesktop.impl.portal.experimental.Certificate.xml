@@ -104,8 +104,38 @@
 
         * ``preselect_certificate`` (``s``)
 
-          A stable certificate identifier, remembered from an earlier grant.
-          This preselects only: consent and PIN entry still happen.
+          A stable certificate identifier, remembered from an earlier grant, or
+          — with ``delegated`` — the one the backend must bind. Without
+          ``delegated`` this preselects only: consent and PIN entry still
+          happen.
+
+        * ``delegated`` (``b``)
+
+          **The one case in which a backend must not show a window.** When this
+          is true the backend must bind the certificate named by
+          ``preselect_certificate`` to this session and answer without a
+          chooser, a consent window or any other interaction, and must refuse
+          — rather than fall back to a chooser — if that certificate is not
+          among the ones matching this request. It is never sent without
+          ``preselect_certificate``; a backend that sees one without the other
+          must treat the request as malformed.
+
+          It says that the frontend has already established that this exact
+          consent exists: the same certificate, for the same ``purpose``, with
+          the same ``certificate_filter``, given by the user to a process which
+          is an ancestor of this caller's process and which asked for its
+          descendants to be covered. See ``delegate_to_children`` on
+          :ref:`org.freedesktop.portal.experimental.Certificate.AcquireCredential`
+          for the full list of conditions and for what that trusts. The
+          frontend checks that the certificate in the results is the one it
+          asked for, so a backend that binds another one gets its answer
+          discarded.
+
+          A backend that does not implement this key ignores it, shows its
+          chooser, and is correct but asks the user a question they have
+          already answered. Nothing else in this interface permits skipping
+          consent: ``preselect_certificate`` on its own does not, and
+          ``interaction_mode`` ``forbidden`` means fail rather than skip.
 
         The following results get returned via the @results vardict:
 
@@ -326,10 +356,15 @@
         :ref:`org.freedesktop.portal.experimental.Certificate::GrantInvalidated`
         and closes the session. It forwards @reason verbatim, so the
         vocabulary here is the public one and not a smaller list: ``released``,
-        ``expired``, ``token_removed``, ``owner_gone``, ``policy``,
-        ``service_shutdown``, ``backend_gone`` or ``error``. A backend that
-        invents a value hands it straight to applications, which is why it
-        should not.
+        ``expired``, ``token_removed``, ``owner_gone``, ``parent_released``,
+        ``policy``, ``service_shutdown``, ``backend_gone`` or ``error``. A
+        backend that invents a value hands it straight to applications, which
+        is why it should not.
+
+        ``parent_released`` is in that list so that the two lists stay the
+        same, and not because a backend has any use for it: the frontend emits
+        it by itself, for a grant it derived from another one, when the other
+        one ended.
     -->
     <signal name="SessionInvalidated">
       <arg type="o" name="session_handle"/>

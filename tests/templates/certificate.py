@@ -71,6 +71,11 @@ def load(mock, parameters=None):
         capabilities=parameters.get("capabilities", DEFAULT_CAPABILITIES),
     )
 
+    # How many times the chooser would have gone up: an AcquireCredential the
+    # frontend did not mark 'delegated'. A delegated one is answered from the
+    # certificate the frontend named, with no window and no question.
+    mock.chooser_count = 0
+
     mock.AddProperties(
         MAIN_IFACE,
         dbus.Dictionary(
@@ -123,11 +128,19 @@ def AcquireCredential(
     request = ImplRequest(self, BUS_NAME, handle, logger, cb_success, cb_error)
 
     results = dict(params.credential)
+    results["certificate_id"] = params.certificate_id
+
+    # 'delegated' is the one key that lets a backend skip its window, and it
+    # never arrives without the certificate to bind.
+    if options.get("delegated", False):
+        assert "preselect_certificate" in options
+        results["certificate_id"] = options["preselect_certificate"]
+    else:
+        self.chooser_count += 1
 
     # A well behaved backend only offers to remember the selection when the
     # frontend said it may, and only then reports that the user asked for it.
     if options.get("allow_selection_memory", False):
-        results["certificate_id"] = params.certificate_id
         results["remember_selection"] = True
 
     if params.expect_close:
@@ -195,6 +208,15 @@ def GetCapabilities(self, app_id, options):
     logger.debug(f"GetCapabilities({app_id}, {options})")
 
     return dbus.Dictionary(self.certificate_params.capabilities, signature="sv")
+
+
+@dbus.service.method(
+    MOCK_IFACE,
+    in_signature="",
+    out_signature="u",
+)
+def GetChooserCount(self):
+    return dbus.UInt32(self.chooser_count)
 
 
 @dbus.service.method(

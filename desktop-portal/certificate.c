@@ -6,7 +6,9 @@
 
 #include "certificate.h"
 
+#include <fcntl.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <gio/gio.h>
 
@@ -46,6 +48,11 @@ certificate_max_total_lifetime (void)
 
 /* Signing or decrypting a whole file through the bus is not what this is for. */
 #define CERTIFICATE_MAX_DATA_SIZE (1024 * 1024)
+
+/* How far up the process tree a delegation check will walk before giving up.
+ * A process tree that deep is not the one this is for, and an unbounded walk
+ * over /proc is a way to spend a fiber. */
+#define CERTIFICATE_MAX_ANCESTRY_DEPTH 64
 
 /* What the portal accepts as a purpose. There is deliberately no purpose
  * meaning "anything". */
@@ -147,6 +154,23 @@ typedef struct _CertificateGrant
   uint64_t consent_deadline;
   GStrv permitted_operations;
   GStrv supported_mechanisms;
+
+  /* What a later AcquireCredential has to match to be answered from this
+   * grant rather than from the user. */
+  char *purpose;
+  GVariant *certificate_filter;
+  char *certificate_id;
+  GVariant *certificate_der;
+
+  /* Whether the holder asked for its descendants to be answered from this
+   * grant, and the pidfd that says which process the holder is. The pidfd is
+   * a duplicate of the caller's: it outlives the XdpAppInfo, and while it is
+   * open the holder's pid number cannot be recycled. */
+  gboolean delegable;
+  int holder_pidfd;
+
+  /* Set on a derived grant: the session handle of the grant it came from. */
+  char *delegated_from;
 } CertificateGrant;
 
 static void
@@ -155,7 +179,26 @@ certificate_grant_free (CertificateGrant *grant)
   g_clear_pointer (&grant->grant_id, g_free);
   g_clear_pointer (&grant->permitted_operations, g_strfreev);
   g_clear_pointer (&grant->supported_mechanisms, g_strfreev);
+  g_clear_pointer (&grant->purpose, g_free);
+  g_clear_pointer (&grant->certificate_filter, g_variant_unref);
+  g_clear_pointer (&grant->certificate_id, g_free);
+  g_clear_pointer (&grant->certificate_der, g_variant_unref);
+  g_clear_pointer (&grant->delegated_from, g_free);
+
+  if (grant->holder_pidfd >= 0)
+    close (grant->holder_pidfd);
+
   g_free (grant);
+}
+
+static CertificateGrant *
+certificate_grant_new (void)
+{
+  CertificateGrant *grant = g_new0 (CertificateGrant, 1);
+
+  grant->holder_pidfd = -1;
+
+  return grant;
 }
 
 struct _XdpCertificate
@@ -175,6 +218,9 @@ G_DECLARE_FINAL_TYPE (XdpCertificate,
                       XdpDbusExperimentalCertificateSkeleton)
 
 static void xdp_certificate_iface_init (XdpDbusExperimentalCertificateIface *iface);
+
+static void invalidate_derived_grants (XdpCertificate *certificate,
+                                       const char     *parent_handle);
 
 G_DEFINE_FINAL_TYPE_WITH_CODE (XdpCertificate,
                                xdp_certificate,
@@ -427,6 +473,9 @@ static XdpOptionKey acquire_credential_options[] = {
   { "reason", G_VARIANT_TYPE_STRING, validate_reason },
 };
 
+/* 'delegate_to_children' and 'requested_lifetime' are deliberately not in that
+ * table: they are answered by the frontend and never forwarded. */
+
 static XdpOptionKey sign_options[] = {
   { "mechanism", G_VARIANT_TYPE_STRING, validate_sign_mechanism },
   { "parameters", G_VARIANT_TYPE_VARDICT, NULL },
@@ -613,9 +662,14 @@ on_session_closed (XdpSessionDex *session,
                    gpointer       user_data)
 {
   XdpCertificate *certificate = XDP_CERTIFICATE (user_data);
+  g_autofree char *handle =
+    g_strdup (xdp_session_dex_get_object_path (session));
 
-  g_hash_table_remove (certificate->grants,
-                       xdp_session_dex_get_object_path (session));
+  g_hash_table_remove (certificate->grants, handle);
+
+  /* However this grant ended -- released, closed, invalidated by the backend
+   * -- the grants derived from it end with it. */
+  invalidate_derived_grants (certificate, handle);
 }
 
 static gboolean
@@ -714,7 +768,7 @@ handle_create_session (XdpDbusExperimentalCertificate *object,
 
         g_hash_table_insert (certificate->grants,
                              g_strdup (session_handle),
-                             g_new0 (CertificateGrant, 1));
+                             certificate_grant_new ());
 
         g_signal_connect_object (session, "session-closed",
                                  G_CALLBACK (on_session_closed),
@@ -763,12 +817,14 @@ acquire_credential_validate_options (XdpAppInfo  *app_info,
                                      GVariant    *arg_options,
                                      uint32_t    *out_lifetime,
                                      gboolean    *out_selection_memory,
+                                     gboolean    *out_delegate_to_children,
                                      GError     **error)
 {
   g_auto(GVariantBuilder) options =
     G_VARIANT_BUILDER_INIT (G_VARIANT_TYPE_VARDICT);
   uint32_t lifetime = CERTIFICATE_DEFAULT_GRANT_LIFETIME;
   gboolean allow_selection_memory = FALSE;
+  gboolean delegate_to_children = FALSE;
 
   if (!xdp_variant_contains_key (arg_options, "purpose"))
     {
@@ -821,6 +877,17 @@ acquire_credential_validate_options (XdpAppInfo  *app_info,
       return NULL;
     }
 
+  if (!g_variant_lookup (arg_options, "delegate_to_children", "b",
+                         &delegate_to_children) &&
+      xdp_variant_contains_key (arg_options, "delegate_to_children"))
+    {
+      g_set_error_literal (error,
+                           XDG_DESKTOP_PORTAL_ERROR,
+                           XDG_DESKTOP_PORTAL_ERROR_INVALID_ARGUMENT,
+                           "Expected type 'b' for option 'delegate_to_children'");
+      return NULL;
+    }
+
   /* Selection memory needs an identity to key on. An application whose
    * identity could not be verified does not get one. */
   if (g_strcmp0 (app_identity_level (app_info), "unidentified") == 0)
@@ -842,8 +909,252 @@ acquire_credential_validate_options (XdpAppInfo  *app_info,
 
   *out_lifetime = lifetime;
   *out_selection_memory = allow_selection_memory;
+  *out_delegate_to_children = delegate_to_children;
 
   return g_variant_ref_sink (g_variant_builder_end (&options));
+}
+
+/* ------------------------------------------------------------------ delegation
+ *
+ * ONE CONSENT FOR ONE PROCESS TREE. A web sign-in needs the certificate built
+ * in the application's own process and the key used in the web engine's
+ * network process; each is a separate D-Bus peer, so each is a separate
+ * caller, and each was asked separately. Nothing about the second question is
+ * new: the same certificate, for the same purpose, on behalf of the same
+ * application, whose process launched the asker.
+ *
+ * So a holder may mark its grant delegable, and a later AcquireCredential from
+ * one of its DESCENDANTS is answered from that grant instead of from the user.
+ * The rules are all in find_delegable_grant() below, and the argument for them
+ * is in the two interface XML files.
+ */
+
+/* The parent of @pid, from /proc, or -1. */
+static pid_t
+read_parent_pid (pid_t pid)
+{
+  g_autofree char *path = g_strdup_printf ("/proc/%d/status", (int) pid);
+  g_autofree char *status = NULL;
+  g_autofree char *number = NULL;
+  const char *field;
+  uint64_t ppid;
+
+  if (!g_file_get_contents (path, &status, NULL, NULL))
+    return -1;
+
+  field = strstr (status, "\nPPid:");
+  if (!field)
+    return -1;
+
+  field += strlen ("\nPPid:");
+  number = g_strndup (field, strcspn (field, "\n"));
+
+  if (!g_ascii_string_to_unsigned (g_strstrip (number), 10, 0, G_MAXINT,
+                                   &ppid, NULL))
+    return -1;
+
+  return (pid_t) ppid;
+}
+
+/* Whether @pid is below @ancestor in the process tree.
+ *
+ * WHAT THIS IS AND IS NOT. Both ends are pinned by a pidfd, so neither of the
+ * two pid numbers that decide the answer can have been recycled. The hops in
+ * between are not pinned: an intermediate process that exits during the walk
+ * either makes its /proc entry unreadable, which refuses here, or -- in the
+ * window before the walk reaches it -- leaves a pid that the kernel could have
+ * handed to an unrelated process. That is a pid wraparound inside a few
+ * microseconds, and the walk stops at the first hop it cannot read. It is
+ * stated rather than hidden: see the security note in the interface XML. */
+static gboolean
+pid_is_descendant_of (pid_t pid,
+                      pid_t ancestor)
+{
+  if (pid <= 0 || ancestor <= 0)
+    return FALSE;
+
+  for (size_t depth = 0; depth < CERTIFICATE_MAX_ANCESTRY_DEPTH; depth++)
+    {
+      pid_t parent;
+
+      /* Nothing is a descendant of itself, and init is nobody's child. */
+      if (pid <= 1)
+        return FALSE;
+
+      parent = read_parent_pid (pid);
+      if (parent < 0)
+        return FALSE;
+
+      if (parent == ancestor)
+        return TRUE;
+
+      pid = parent;
+    }
+
+  return FALSE;
+}
+
+/* Two vardicts hold the same keys with the same values. Not g_variant_equal(),
+ * which compares the serialised form and so calls two dictionaries built in a
+ * different key order different. */
+static gboolean
+vardict_equal (GVariant *a,
+               GVariant *b)
+{
+  GVariantIter iter;
+  const char *key;
+  GVariant *value;
+  gboolean equal = TRUE;
+
+  if (a == b)
+    return TRUE;
+
+  if (!a || !b)
+    return FALSE;
+
+  if (g_variant_n_children (a) != g_variant_n_children (b))
+    return FALSE;
+
+  g_variant_iter_init (&iter, a);
+  while (equal && g_variant_iter_next (&iter, "{&sv}", &key, &value))
+    {
+      g_autoptr(GVariant) other = g_variant_lookup_value (b, key, NULL);
+
+      equal = other && g_variant_equal (value, other);
+      g_variant_unref (value);
+    }
+
+  return equal;
+}
+
+/* The pid behind a pidfd, or -1 if the process is gone. */
+static pid_t
+pid_of_pidfd (int pidfd)
+{
+  pid_t pid = -1;
+
+  if (pidfd < 0)
+    return -1;
+
+  if (!xdp_pidfds_to_pids (&pidfd, &pid, 1, NULL))
+    return -1;
+
+  return pid;
+}
+
+/* The live delegable grant this request may be answered from, or NULL.
+ *
+ * EVERY CONDITION IS CHECKED HERE, AT REQUEST TIME, and none of it is cached:
+ *
+ *   - the holder opted in with 'delegate_to_children', and the grant it
+ *     produced was not itself derived (a derived grant is never delegable;
+ *     a descendant of a descendant is a descendant of the holder anyway, and
+ *     matches the holder's grant directly);
+ *   - the grant is still acquired and has not expired;
+ *   - the purpose is the same string;
+ *   - the caller's certificate_filter is absent, or holds exactly what the
+ *     holder's held. A filter narrows what the user was offered, so a caller
+ *     asking for a narrower one has not been answered by this consent;
+ *   - the backend gave the holder's grant a certificate_id, without which
+ *     there is nothing to tell the backend to bind;
+ *   - the holder's process is still alive, and the caller's process is a
+ *     descendant of it.
+ */
+static CertificateGrant *
+find_delegable_grant (XdpCertificate  *certificate,
+                      XdpAppInfo      *app_info,
+                      const char      *purpose,
+                      GVariant        *filter,
+                      const char     **out_handle)
+{
+  uint64_t now = (uint64_t) (g_get_real_time () / G_USEC_PER_SEC);
+  GHashTableIter iter;
+  gpointer key;
+  gpointer value;
+  pid_t caller_pid;
+
+  caller_pid = pid_of_pidfd (xdp_app_info_get_pidfd (app_info));
+  if (caller_pid < 0)
+    return NULL;
+
+  g_hash_table_iter_init (&iter, certificate->grants);
+  while (g_hash_table_iter_next (&iter, &key, &value))
+    {
+      CertificateGrant *grant = value;
+      pid_t holder_pid;
+
+      if (!grant->acquired || !grant->delegable)
+        continue;
+
+      if (grant->expires_at <= now)
+        continue;
+
+      if (g_strcmp0 (grant->purpose, purpose) != 0)
+        continue;
+
+      if (filter && !vardict_equal (filter, grant->certificate_filter))
+        continue;
+
+      if (!grant->certificate_id)
+        continue;
+
+      holder_pid = pid_of_pidfd (grant->holder_pidfd);
+      if (holder_pid < 0)
+        continue;
+
+      if (!pid_is_descendant_of (caller_pid, holder_pid))
+        continue;
+
+      *out_handle = key;
+      return grant;
+    }
+
+  return NULL;
+}
+
+/* A derived grant dies with the grant it came from. The session is closed as
+ * well, so a caller which was not listening for the signal still finds out at
+ * its next call. */
+static void
+invalidate_derived_grants (XdpCertificate *certificate,
+                           const char     *parent_handle)
+{
+  g_autoptr(GPtrArray) derived = g_ptr_array_new_with_free_func (g_free);
+  GHashTableIter iter;
+  gpointer key;
+  gpointer value;
+
+  g_hash_table_iter_init (&iter, certificate->grants);
+  while (g_hash_table_iter_next (&iter, &key, &value))
+    {
+      CertificateGrant *grant = value;
+
+      if (g_strcmp0 (grant->delegated_from, parent_handle) == 0)
+        g_ptr_array_add (derived, g_strdup (key));
+    }
+
+  for (size_t i = 0; i < derived->len; i++)
+    {
+      const char *handle = g_ptr_array_index (derived, i);
+      XdpSessionDex *session;
+
+      xdp_dbus_experimental_certificate_emit_grant_invalidated (
+        XDP_DBUS_EXPERIMENTAL_CERTIFICATE (certificate), handle, "parent_released");
+
+      session = xdp_session_dex_store_lookup_session (certificate->sessions,
+                                                      handle,
+                                                      NULL);
+      if (session && !xdp_session_dex_is_closed (session))
+        {
+          g_autoptr(XdpSessionDex) held = g_object_ref (session);
+
+          xdp_session_dex_close (held, TRUE);
+        }
+      else
+        {
+          g_hash_table_remove (certificate->grants, handle);
+        }
+    }
 }
 
 static GVariant *
@@ -870,6 +1181,49 @@ options_with_preselect (GVariant   *options,
   return g_variant_ref_sink (g_variant_builder_end (&builder));
 }
 
+/* The options for a delegated acquisition. The backend is still called -- it
+ * owns the token session and has to bind the same certificate to this new
+ * session -- but it is told which certificate, and that this request has
+ * already been consented to. 'lifetime' is replaced rather than added: the
+ * derived grant never outlives the one it came from. */
+static GVariant *
+options_with_delegation (GVariant   *options,
+                         const char *certificate_id,
+                         uint32_t    lifetime)
+{
+  g_auto(GVariantBuilder) builder =
+    G_VARIANT_BUILDER_INIT (G_VARIANT_TYPE_VARDICT);
+  GVariantIter iter;
+  const char *key;
+  GVariant *value;
+
+  g_variant_iter_init (&iter, options);
+  while (g_variant_iter_next (&iter, "{&sv}", &key, &value))
+    {
+      if (g_strcmp0 (key, "lifetime") != 0 &&
+          g_strcmp0 (key, "preselect_certificate") != 0 &&
+          g_strcmp0 (key, "allow_selection_memory") != 0)
+        g_variant_builder_add (&builder, "{sv}", key, value);
+
+      g_variant_unref (value);
+    }
+
+  g_variant_builder_add (&builder, "{sv}",
+                         "lifetime", g_variant_new_uint32 (lifetime));
+  g_variant_builder_add (&builder, "{sv}",
+                         "preselect_certificate",
+                         g_variant_new_string (certificate_id));
+  /* A derived grant remembers nothing: the selection it uses was already
+   * made, and storing it again would be a second consent nobody gave. */
+  g_variant_builder_add (&builder, "{sv}",
+                         "allow_selection_memory",
+                         g_variant_new_boolean (FALSE));
+  g_variant_builder_add (&builder, "{sv}",
+                         "delegated", g_variant_new_boolean (TRUE));
+
+  return g_variant_ref_sink (g_variant_builder_end (&builder));
+}
+
 static gboolean
 handle_acquire_credential (XdpDbusExperimentalCertificate *object,
                            GDBusMethodInvocation          *invocation,
@@ -880,16 +1234,23 @@ handle_acquire_credential (XdpDbusExperimentalCertificate *object,
   XdpCertificate *certificate = XDP_CERTIFICATE (object);
   XdpAppInfo *app_info = xdp_invocation_get_app_info (invocation);
   CertificateGrant *grant;
+  CertificateGrant *parent = NULL;
   g_autoptr(XdpRequestDex) request = NULL;
   g_autoptr(GVariant) options = NULL;
+  g_autoptr(GVariant) certificate_filter = NULL;
   g_autoptr(GError) error = NULL;
+  g_autofree char *parent_handle = NULL;
+  const char *purpose = NULL;
+  const char *interaction_mode = NULL;
   gboolean allow_selection_memory = FALSE;
+  gboolean delegate_to_children = FALSE;
   uint32_t lifetime = CERTIFICATE_DEFAULT_GRANT_LIFETIME;
 
   options = acquire_credential_validate_options (app_info,
                                                  arg_options,
                                                  &lifetime,
                                                  &allow_selection_memory,
+                                                 &delegate_to_children,
                                                  &error);
   if (!options)
     {
@@ -905,7 +1266,33 @@ handle_acquire_credential (XdpDbusExperimentalCertificate *object,
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
-  if (allow_selection_memory)
+  g_variant_lookup (arg_options, "purpose", "&s", &purpose);
+  g_variant_lookup (arg_options, "interaction_mode", "&s", &interaction_mode);
+  certificate_filter = g_variant_lookup_value (arg_options, "certificate_filter",
+                                               G_VARIANT_TYPE_VARDICT);
+
+  /* 'required' means always ask, and a caller that said so meant it. */
+  if (g_strcmp0 (interaction_mode, "required") != 0)
+    {
+      const char *found = NULL;
+
+      parent = find_delegable_grant (certificate, app_info, purpose,
+                                     certificate_filter, &found);
+      parent_handle = g_strdup (found);
+    }
+
+  if (parent)
+    {
+      g_autoptr(GVariant) old_options = g_steal_pointer (&options);
+      uint64_t now = (uint64_t) (g_get_real_time () / G_USEC_PER_SEC);
+
+      /* Never longer than what is left of the consent it came from. */
+      lifetime = (uint32_t) MIN ((uint64_t) lifetime, parent->expires_at - now);
+      options = options_with_delegation (old_options,
+                                         parent->certificate_id,
+                                         lifetime);
+    }
+  else if (allow_selection_memory)
     {
       g_auto(GStrv) permissions = NULL;
 
@@ -965,8 +1352,11 @@ handle_acquire_credential (XdpDbusExperimentalCertificate *object,
       &error);
 
     /* The session can have gone away while the user was making up their
-     * mind. */
+     * mind. So can the grant this one was to be derived from. */
     grant = g_hash_table_lookup (certificate->grants, arg_session_handle);
+    parent = parent_handle
+      ? g_hash_table_lookup (certificate->grants, parent_handle)
+      : NULL;
 
     if (!result)
       {
@@ -979,7 +1369,7 @@ handle_acquire_credential (XdpDbusExperimentalCertificate *object,
       {
         response = result->response;
       }
-    else if (!grant)
+    else if (!grant || (parent_handle && !parent))
       {
         response = XDG_DESKTOP_PORTAL_RESPONSE_OTHER;
       }
@@ -991,8 +1381,32 @@ handle_acquire_credential (XdpDbusExperimentalCertificate *object,
         };
         g_auto(GStrv) reported_mechanisms = NULL;
         g_auto(GStrv) reported_operations = NULL;
+        g_autoptr(GVariant) certificate_der = NULL;
         const char *certificate_id = NULL;
         gboolean remember_selection = FALSE;
+
+        certificate_der = g_variant_lookup_value (result->results,
+                                                  "certificate_der",
+                                                  G_VARIANT_TYPE_BYTESTRING);
+        g_variant_lookup (result->results, "certificate_id", "&s",
+                          &certificate_id);
+
+        /* THE BACKEND HAS TO HAVE BOUND THE CERTIFICATE IT WAS TOLD TO. The
+         * user consented to this certificate once and is not being asked
+         * again; a derived grant carrying some other one would be consent
+         * moved to a credential nobody chose. */
+        if (parent &&
+            !(certificate_der && parent->certificate_der &&
+              g_variant_equal (certificate_der, parent->certificate_der)))
+          {
+            g_warning ("Backend bound a different certificate for a "
+                       "delegated request");
+
+            xdp_request_dex_emit_response (request,
+                                           XDG_DESKTOP_PORTAL_RESPONSE_OTHER,
+                                           g_variant_builder_end (&results_builder));
+            return G_DBUS_METHOD_INVOCATION_HANDLED;
+          }
 
         for (size_t i = 0; i < G_N_ELEMENTS (passthrough_keys); i++)
           {
@@ -1020,15 +1434,80 @@ handle_acquire_credential (XdpDbusExperimentalCertificate *object,
           strv_intersect (certificate_operations,
                           (const char * const *) reported_operations);
 
+        /* A derived grant is a subset of the one it came from, in every
+         * dimension: never another operation, never another mechanism, and
+         * never a moment longer. */
+        if (parent)
+          {
+            g_auto(GStrv) mechanisms = g_steal_pointer (&grant->supported_mechanisms);
+            g_auto(GStrv) operations = g_steal_pointer (&grant->permitted_operations);
+
+            grant->supported_mechanisms =
+              strv_intersect ((const char * const *) parent->supported_mechanisms,
+                              (const char * const *) mechanisms);
+            grant->permitted_operations =
+              strv_intersect ((const char * const *) parent->permitted_operations,
+                              (const char * const *) operations);
+          }
+
         {
           uint64_t now = (uint64_t) (g_get_real_time () / G_USEC_PER_SEC);
 
           grant->acquired = TRUE;
-          grant->consent_deadline = now + certificate_max_total_lifetime ();
+          grant->consent_deadline = parent
+            ? parent->consent_deadline
+            : now + certificate_max_total_lifetime ();
           grant->expires_at = MIN (now + lifetime, grant->consent_deadline);
+
+          if (parent)
+            grant->expires_at = MIN (grant->expires_at, parent->expires_at);
         }
         g_clear_pointer (&grant->grant_id, g_free);
         grant->grant_id = g_uuid_string_random ();
+
+        /* What a later request has to match to be answered from this grant,
+         * and whether it may be. A derived grant is never delegable itself:
+         * a descendant of its holder is a descendant of the original holder
+         * too, and matches the original grant directly. */
+        g_clear_pointer (&grant->purpose, g_free);
+        g_clear_pointer (&grant->certificate_filter, g_variant_unref);
+        g_clear_pointer (&grant->certificate_id, g_free);
+        g_clear_pointer (&grant->certificate_der, g_variant_unref);
+        g_clear_pointer (&grant->delegated_from, g_free);
+        grant->purpose = g_strdup (purpose);
+        grant->certificate_filter = certificate_filter
+          ? g_variant_ref (certificate_filter)
+          : NULL;
+        grant->certificate_id = g_strdup (certificate_id);
+        grant->certificate_der = certificate_der
+          ? g_variant_ref (certificate_der)
+          : NULL;
+        grant->delegated_from = g_strdup (parent_handle);
+        grant->delegable = delegate_to_children && !parent &&
+                           certificate_id != NULL && certificate_der != NULL;
+
+        if (grant->holder_pidfd >= 0)
+          {
+            close (grant->holder_pidfd);
+            grant->holder_pidfd = -1;
+          }
+
+        if (grant->delegable)
+          {
+            /* A duplicate, because the XdpAppInfo closes its own when the
+             * caller's connection goes. While this one is open the holder's
+             * pid number cannot be reused by another process. */
+            grant->holder_pidfd =
+              fcntl (xdp_app_info_get_pidfd (app_info), F_DUPFD_CLOEXEC, 3);
+
+            if (grant->holder_pidfd < 0)
+              grant->delegable = FALSE;
+          }
+
+        if (parent_handle)
+          g_variant_builder_add (&results_builder, "{sv}",
+                                 "delegated_from",
+                                 g_variant_new_object_path (parent_handle));
 
         g_variant_builder_add (&results_builder, "{sv}",
                                "grant_id",
@@ -1051,9 +1530,8 @@ handle_acquire_credential (XdpDbusExperimentalCertificate *object,
          * selection memory. Whether anything is remembered is ours. */
         g_variant_lookup (result->results, "remember_selection", "b",
                           &remember_selection);
-        if (allow_selection_memory && remember_selection &&
-            g_variant_lookup (result->results, "certificate_id", "&s",
-                              &certificate_id))
+        if (allow_selection_memory && remember_selection && certificate_id &&
+            !parent)
           {
             const char *permissions[] = { certificate_id, NULL };
 
@@ -1325,6 +1803,7 @@ handle_renew_grant (XdpDbusExperimentalCertificate *object,
   XdpAppInfo *app_info = xdp_invocation_get_app_info (invocation);
   CertificateGrant *grant;
   g_autoptr(GError) error = NULL;
+  uint64_t parent_expiry = G_MAXUINT64;
   uint32_t lifetime = CERTIFICATE_DEFAULT_GRANT_LIFETIME;
 
   if (g_variant_lookup (arg_options, "requested_lifetime", "u", &lifetime))
@@ -1338,6 +1817,28 @@ handle_renew_grant (XdpDbusExperimentalCertificate *object,
     }
 
   grant = g_hash_table_lookup (certificate->grants, arg_session_handle);
+
+  /* A derived grant is renewable, but never past the grant it came from: not
+   * past its consent deadline, which it already carries, and not past the
+   * expiry that grant has now. If the grant it came from is gone, so is the
+   * consent, and there is nothing left to renew against. */
+  if (grant && grant->acquired && grant->delegated_from)
+    {
+      CertificateGrant *parent =
+        g_hash_table_lookup (certificate->grants, grant->delegated_from);
+
+      if (!parent || !parent->acquired)
+        {
+          g_dbus_method_invocation_return_error_literal (
+            g_steal_pointer (&invocation),
+            XDG_DESKTOP_PORTAL_ERROR,
+            XDG_DESKTOP_PORTAL_ERROR_NOT_ALLOWED,
+            "The grant this one was derived from is gone");
+          return G_DBUS_METHOD_INVOCATION_HANDLED;
+        }
+
+      parent_expiry = parent->expires_at;
+    }
 
   /* Before the ordinary checks, because the expiry a passed deadline produces
    * would otherwise report itself as "expired" — which invites another
@@ -1362,8 +1863,9 @@ handle_renew_grant (XdpDbusExperimentalCertificate *object,
     }
 
   grant->expires_at =
-    MIN ((uint64_t) (g_get_real_time () / G_USEC_PER_SEC) + lifetime,
-         grant->consent_deadline);
+    MIN (MIN ((uint64_t) (g_get_real_time () / G_USEC_PER_SEC) + lifetime,
+              grant->consent_deadline),
+         parent_expiry);
 
   xdp_dbus_experimental_certificate_complete_renew_grant (
     object,

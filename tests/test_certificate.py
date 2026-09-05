@@ -3,6 +3,9 @@
 #
 # This file is formatted with Python Black
 
+import json
+import subprocess
+import sys
 import time
 
 import dbus
@@ -719,6 +722,357 @@ class TestCertificate:
         # Eight renewals' worth: one consent, one working day, and no longer
         assert capabilities["max_grant_total_lifetime"] == 8 * 3600
         assert capabilities["selection_memory"]
+
+
+# A client in a PROCESS OF ITS OWN, because delegation is a claim about the
+# process tree and a claim about the process tree cannot be tested from one
+# process. It acquires a credential, prints what it got, and then waits on
+# stdin so that the test can still act on a live grant.
+CHILD_CLIENT = r"""
+import json
+import sys
+
+import dbus
+from dbus.mainloop.glib import DBusGMainLoop
+from gi.repository import GLib
+
+DBusGMainLoop(set_as_default=True)
+
+bus = dbus.SessionBus()
+proxy = bus.get_object(
+    "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop"
+)
+intf = dbus.Interface(proxy, "org.freedesktop.portal.experimental.Certificate")
+sender = bus.get_unique_name().lstrip(":").replace(".", "_")
+counter = 0
+
+
+def call(method, *args, options):
+    global counter
+
+    counter += 1
+    token = f"child{counter}"
+    path = f"/org/freedesktop/portal/desktop/request/{sender}/{token}"
+    options = dict(options, handle_token=token)
+    answer = {}
+    loop = GLib.MainLoop()
+
+    def on_response(response, results):
+        answer["response"] = int(response)
+        answer["results"] = results
+        loop.quit()
+
+    match = bus.add_signal_receiver(
+        on_response,
+        signal_name="Response",
+        dbus_interface="org.freedesktop.portal.Request",
+        path=path,
+    )
+    getattr(intf, method)(*args, options)
+    GLib.timeout_add_seconds(15, loop.quit)
+    loop.run()
+    match.remove()
+
+    return answer
+
+
+# JSON has one kind of dict and one kind of list; D-Bus does not, and the
+# portal type-checks what it is sent. A dict is a vardict, a list is 'as'.
+def to_dbus(value):
+    if isinstance(value, dict):
+        return dbus.Dictionary(
+            {k: to_dbus(v) for k, v in value.items()}, signature="sv"
+        )
+    if isinstance(value, list):
+        return dbus.Array(value, signature="s")
+    return value
+
+
+options = to_dbus(json.loads(sys.argv[1]))
+created = call("CreateSession", options={})
+session = created["results"]["session_handle"]
+acquired = call(
+    "AcquireCredential", dbus.ObjectPath(session), "", options=options
+)
+results = acquired.get("results", {})
+
+print(
+    json.dumps(
+        {
+            "response": acquired.get("response", -1),
+            "session_handle": str(session),
+            "delegated_from": str(results.get("delegated_from", "")),
+            "certificate_der": bytes(
+                results.get("certificate_der", b"")
+            ).decode("latin-1"),
+            "permitted_operations": [str(o) for o in results.get("permitted_operations", [])],
+            "supported_mechanisms": [str(m) for m in results.get("supported_mechanisms", [])],
+            "expires_at": int(results.get("expires_at", 0)),
+        }
+    ),
+    flush=True,
+)
+
+# Hold the grant until the test is done with it.
+sys.stdin.readline()
+"""
+
+
+class ChildClient:
+    """
+    A client running as a child process of the test, so that the ancestry the
+    portal walks is a real one.
+    """
+
+    def __init__(self, options=None):
+        self.process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                CHILD_CLIENT,
+                json.dumps(options or {"purpose": "client_auth"}),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+
+    def acquired(self):
+        line = self.process.stdout.readline()
+        assert line, "the child client did not answer"
+        return json.loads(line)
+
+    def stop(self):
+        try:
+            self.process.stdin.close()
+            self.process.wait(timeout=10)
+        except Exception:
+            self.process.kill()
+
+
+class TestCertificateDelegation:
+    """
+    ONE CONSENT FOR ONE PROCESS TREE. A grant whose holder passed
+    delegate_to_children answers a later AcquireCredential from a descendant of
+    the holder's process, without a second chooser.
+    """
+
+    def test_descendant_gets_a_derived_grant(self, portals, dbus_con):
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+        mock_intf = xdp.get_mock_iface(dbus_con)
+
+        session = create_session(dbus_con, intf)
+        response = acquire_credential(
+            dbus_con,
+            intf,
+            session,
+            options={"purpose": "client_auth", "delegate_to_children": True},
+        )
+        assert response
+        assert response.response == 0
+
+        child = ChildClient()
+        try:
+            acquired = child.acquired()
+        finally:
+            child.stop()
+
+        assert acquired["response"] == 0
+        # The same certificate, and a grant that says where it came from
+        assert acquired["delegated_from"] == session.handle
+        assert acquired["certificate_der"] == "certificate"
+        assert acquired["permitted_operations"] == ["sign"]
+        assert acquired["supported_mechanisms"] == ["ECDSA"]
+        assert acquired["expires_at"] <= response.results["expires_at"]
+
+        # THE WINDOW WENT UP ONCE. The backend was called twice -- it owns the
+        # token session and has to bind the certificate to the second one --
+        # but only the first call was a question to the user.
+        assert len(mock_intf.GetMethodCalls("AcquireCredential")) == 2
+        assert mock_intf.GetChooserCount() == 1
+
+        _, args = mock_intf.GetMethodCalls("AcquireCredential")[-1]
+        assert args[4]["delegated"]
+        assert args[4]["preselect_certificate"] == "cert-1"
+        # A derived grant remembers nothing
+        assert not args[4]["allow_selection_memory"]
+
+    def test_without_the_opt_in_the_child_is_asked(self, portals, dbus_con):
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+        mock_intf = xdp.get_mock_iface(dbus_con)
+
+        session = create_session(dbus_con, intf)
+        assert acquire_credential(dbus_con, intf, session).response == 0
+
+        child = ChildClient()
+        try:
+            acquired = child.acquired()
+        finally:
+            child.stop()
+
+        assert acquired["response"] == 0
+        assert acquired["delegated_from"] == ""
+        assert mock_intf.GetChooserCount() == 2
+
+        _, args = mock_intf.GetMethodCalls("AcquireCredential")[-1]
+        assert "delegated" not in args[4]
+
+    def test_a_sibling_is_not_a_descendant(self, portals, dbus_con):
+        """
+        Two children of the test process. The second is not below the first,
+        so the first one's delegable grant is not an answer for it.
+        """
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+        mock_intf = xdp.get_mock_iface(dbus_con)
+
+        holder = ChildClient({"purpose": "client_auth", "delegate_to_children": True})
+        sibling = None
+        try:
+            assert holder.acquired()["response"] == 0
+
+            sibling = ChildClient()
+            acquired = sibling.acquired()
+        finally:
+            if sibling:
+                sibling.stop()
+            holder.stop()
+
+        assert acquired["response"] == 0
+        assert acquired["delegated_from"] == ""
+        assert mock_intf.GetChooserCount() == 2
+
+    def test_a_narrower_filter_is_a_different_question(self, portals, dbus_con):
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+        mock_intf = xdp.get_mock_iface(dbus_con)
+
+        session = create_session(dbus_con, intf)
+        assert (
+            acquire_credential(
+                dbus_con,
+                intf,
+                session,
+                options={"purpose": "client_auth", "delegate_to_children": True},
+            ).response
+            == 0
+        )
+
+        child = ChildClient(
+            {
+                "purpose": "client_auth",
+                "certificate_filter": {"key_algorithms": ["RSA"]},
+            }
+        )
+        try:
+            acquired = child.acquired()
+        finally:
+            child.stop()
+
+        assert acquired["response"] == 0
+        assert acquired["delegated_from"] == ""
+        assert mock_intf.GetChooserCount() == 2
+
+    def test_a_different_purpose_is_a_different_question(self, portals, dbus_con):
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+        mock_intf = xdp.get_mock_iface(dbus_con)
+
+        session = create_session(dbus_con, intf)
+        assert (
+            acquire_credential(
+                dbus_con,
+                intf,
+                session,
+                options={"purpose": "client_auth", "delegate_to_children": True},
+            ).response
+            == 0
+        )
+
+        child = ChildClient({"purpose": "signing"})
+        try:
+            acquired = child.acquired()
+        finally:
+            child.stop()
+
+        assert acquired["response"] == 0
+        assert acquired["delegated_from"] == ""
+        assert mock_intf.GetChooserCount() == 2
+
+    def test_interaction_mode_required_is_still_a_prompt(self, portals, dbus_con):
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+        mock_intf = xdp.get_mock_iface(dbus_con)
+
+        session = create_session(dbus_con, intf)
+        assert (
+            acquire_credential(
+                dbus_con,
+                intf,
+                session,
+                options={"purpose": "client_auth", "delegate_to_children": True},
+            ).response
+            == 0
+        )
+
+        child = ChildClient({"purpose": "client_auth", "interaction_mode": "required"})
+        try:
+            acquired = child.acquired()
+        finally:
+            child.stop()
+
+        assert acquired["delegated_from"] == ""
+        assert mock_intf.GetChooserCount() == 2
+
+    def test_releasing_the_parent_invalidates_the_derived_grant(
+        self, portals, dbus_con
+    ):
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+
+        invalidated = []
+        intf.connect_to_signal(
+            "GrantInvalidated",
+            lambda handle, reason: invalidated.append((handle, reason)),
+        )
+
+        session = create_session(dbus_con, intf)
+        assert (
+            acquire_credential(
+                dbus_con,
+                intf,
+                session,
+                options={"purpose": "client_auth", "delegate_to_children": True},
+            ).response
+            == 0
+        )
+
+        child = ChildClient()
+        try:
+            acquired = child.acquired()
+            assert acquired["delegated_from"] == session.handle
+
+            intf.ReleaseGrant(session.handle)
+            xdp.wait_for(lambda: len(invalidated) == 2)
+        finally:
+            child.stop()
+
+        assert (session.handle, "released") in invalidated
+        assert (acquired["session_handle"], "parent_released") in invalidated
+
+    def test_invalid_delegate_to_children_rejected(self, portals, dbus_con):
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+
+        session = create_session(dbus_con, intf)
+
+        request = xdp.Request(dbus_con, intf)
+        with pytest.raises(dbus.exceptions.DBusException) as excinfo:
+            request.call(
+                "AcquireCredential",
+                session_handle=session.handle,
+                parent_window="",
+                options={
+                    "purpose": "client_auth",
+                    "delegate_to_children": dbus.UInt32(1),
+                },
+            )
+
+        assert "delegate_to_children" in str(excinfo.value)
 
 
 class TestCertificateConsentDeadline:

@@ -178,6 +178,60 @@
           must present it as such and never in the position where it shows the
           identity of the application.
 
+        * ``delegate_to_children`` (``b``)
+
+          Whether the grant this call produces may answer a later
+          ``AcquireCredential`` from a **descendant of the calling process**,
+          without asking the user a second time. Defaults to false.
+
+          This exists because one job can need the same credential in more
+          than one process. A web sign-in builds the client certificate in the
+          application's own process and uses its key in the web engine's
+          network process; those are two connections to this portal, so
+          without this they are two questions to the user about the same
+          certificate, seconds apart.
+
+          When it is set, a later call is answered from this grant instead of
+          from the user only if **all** of the following hold, and all of them
+          are checked when that later call arrives rather than remembered from
+          this one:
+
+          * the caller's process is a descendant of this caller's process,
+            walking ``/proc`` upwards. The holder's own process reaching the
+            portal on a second connection is not a descendant and is not a
+            match;
+          * this grant is still live and unexpired, and the holder's process
+            is still running;
+          * the ``purpose`` is the same;
+          * the caller passed no ``certificate_filter``, or one holding
+            exactly what this call passed. A filter narrows what the user was
+            offered, so a narrower one is a different question;
+          * the caller did not pass ``interaction_mode`` ``required``, which
+            means "always prompt".
+
+          What the caller then gets is a **derived grant**: the same
+          certificate, ``permitted_operations`` and ``supported_mechanisms``
+          that are a subset of this grant's, an expiry no later than this
+          grant's, and ``delegated_from`` in its results. It ends when this
+          grant ends, with reason ``parent_released``. It is never itself
+          delegable, even if it also passed ``delegate_to_children``: a
+          descendant of its holder is a descendant of this caller too, and
+          matches this grant directly.
+
+          **What this is trusting, and what it is not.** The holder opts in,
+          and only its own descendants are covered. A parent process on the
+          same UID can already read and write its children's memory, so a
+          descendant that gets a derived grant obtains nothing its holder
+          could not have obtained itself and forwarded. This is not a boundary
+          against the holder: an application that launches code it does not
+          trust as a child process — a sandbox launcher, a plugin host — must
+          not pass this option. Nor is it a boundary against the kernel's pid
+          reuse: the two ends of the walk are pinned by pidfds, so their pid
+          numbers cannot be recycled, but a process in between that exits
+          during the walk could in principle have its pid handed to another
+          process before the walk reaches it. The walk is bounded and stops at
+          the first ``/proc`` entry it cannot read.
+
         The following results get returned via the :ref:`org.freedesktop.portal.Request::Response` signal:
 
         * ``grant_id`` (``s``)
@@ -233,6 +287,14 @@
 
           Whether a later ``Sign`` or ``Decrypt`` on this grant may show a
           window.
+
+        * ``delegated_from`` (``o``)
+
+          Present only on a derived grant: the session handle of the grant it
+          was derived from, which is a grant held by an ancestor process that
+          passed ``delegate_to_children``. Its presence is how a caller knows
+          no window was shown for this acquisition, and that this grant ends
+          when that one does.
     -->
     <method name="AcquireCredential">
       <arg type="o" name="session_handle" direction="in"/>
@@ -567,8 +629,13 @@
         session is closed as well; this signal exists to say why.
 
         @reason is one of ``released``, ``expired``, ``token_removed``,
-        ``owner_gone``, ``policy``, ``service_shutdown``, ``backend_gone`` or
-        ``error``. Consumers must tolerate values they do not know.
+        ``owner_gone``, ``parent_released``, ``policy``, ``service_shutdown``,
+        ``backend_gone`` or ``error``. Consumers must tolerate values they do
+        not know.
+
+        ``parent_released`` is emitted for a derived grant — one whose results
+        carried ``delegated_from`` — when the grant it was derived from ended,
+        for whatever reason. Only the portal frontend emits it.
     -->
     <signal name="GrantInvalidated">
       <arg type="o" name="session_handle"/>
