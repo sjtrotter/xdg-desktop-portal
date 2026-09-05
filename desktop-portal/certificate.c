@@ -687,7 +687,7 @@ handle_create_session (XdpDbusExperimentalCertificate *object,
 
         g_variant_builder_add (&results_builder, "{sv}",
                                "session_handle",
-                               g_variant_new_string (session_handle));
+                               g_variant_new_object_path (session_handle));
 
         g_hash_table_insert (certificate->grants,
                              g_strdup (session_handle),

@@ -50,6 +50,8 @@ def create_session(dbus_con, intf):
     response = request.call("CreateSession", options={})
     assert response
     assert response.response == 0
+    # The XML types session_handle as an object path, not a string.
+    assert isinstance(response.results["session_handle"], dbus.ObjectPath)
     return xdp.Session.from_response(dbus_con, response)
 
 
