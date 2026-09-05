@@ -44,6 +44,7 @@ portal_sources = files(
 
 portal_experimental_sources = files(
   'org.freedesktop.portal.experimental.Certificate1.xml',
+  'org.freedesktop.portal.experimental.WebAuthentication1.xml',
 )
 
 portal_host_sources = files(
@@ -79,6 +80,7 @@ portal_impl_sources = files(
 
 portal_experimental_impl_sources = files(
   'org.freedesktop.impl.portal.experimental.Certificate1.xml',
+  'org.freedesktop.impl.portal.experimental.WebAuthentication1.xml',
 )
 
 background_monitor_sources = files(
