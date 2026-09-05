@@ -1,0 +1,239 @@
+<?xml version="1.0"?>
+<!--
+ SPDX-License-Identifier: LGPL-2.1-or-later
+ SPDX-FileCopyrightText: Copyright © the xdg-desktop-portal contributors
+-->
+
+<node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
+  <!--
+      org.freedesktop.impl.portal.experimental.Certificate1:
+      @short_description: Backend for the portal for certificates on security tokens
+
+      This interface provides certificate selection and consent dialogs,
+      handles PIN entry, and performs private key operations on the token.
+      Private keys and PINs must not cross this interface.
+
+      The frontend supplies the allowed grant lifetime and the identity level
+      of ``app_id``. The backend uses the identity level to display how much
+      the application identity can be trusted.
+
+      This is an experimental interface and can change or get removed at
+      any time. An incompatible change increments the number at the end of
+      the interface name. See :doc:`experimental-portals`.
+  -->
+  <interface name="org.freedesktop.impl.portal.experimental.Certificate1">
+    <!--
+        CreateSession:
+        @handle: Object path for the :ref:`org.freedesktop.impl.portal.Request` object representing this call
+        @session_handle: Object path for the :ref:`org.freedesktop.impl.portal.Session` object
+        @app_id: App ID of the application
+        @options: Vardict with optional further information
+        @response: Numeric response
+        @results: Vardict with the results of the call
+
+        Creates an empty grant session. The @options vardict is currently
+        unused, and the @results vardict is currently empty.
+    -->
+    <method name="CreateSession">
+      <arg type="o" name="handle" direction="in"/>
+      <arg type="o" name="session_handle" direction="in"/>
+      <arg type="s" name="app_id" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In3" value="QVariantMap"/>
+      <arg type="a{sv}" name="options" direction="in"/>
+      <arg type="u" name="response" direction="out"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out1" value="QVariantMap"/>
+      <arg type="a{sv}" name="results" direction="out"/>
+    </method>
+
+    <!--
+        AcquireCredential:
+        @handle: Object path for the :ref:`org.freedesktop.impl.portal.Request` object representing this call
+        @session_handle: Object path for the :ref:`org.freedesktop.impl.portal.Session` object
+        @app_id: App ID of the application
+        @parent_window: Identifier for the application window, see :doc:`window-identifiers`
+        @options: Vardict with optional further information
+        @response: Numeric response
+        @results: Vardict with the results of the call
+
+        Lets the user select a certificate and authorize its use. A failed
+        call can be retried. A session can acquire a credential successfully
+        only once.
+
+        Supported keys in the @options vardict include:
+
+        * ``purpose`` (``s``), ``certificate_filter`` (``a{sv}``),
+          ``operation_policy`` (``a{sv}``), ``interaction_mode`` (``s``),
+          ``activation_token`` (``s``) and ``reason`` (``s``)
+
+          As on :ref:`org.freedesktop.portal.experimental.Certificate1.AcquireCredential`.
+          The frontend validates supported top-level and nested keys and
+          checks the values of ``purpose``, ``interaction_mode`` and
+          ``piv_slot``, and the keys of ``operation_policy``, against the
+          documented vocabularies. The free-form filter arrays ``issuers``,
+          ``key_usage``, ``eku`` and ``key_algorithms`` are type-checked and
+          forwarded unchanged. Their contents are application-supplied.
+
+          With ``interaction_mode`` set to ``forbidden``, the backend must
+          fail if consent would require prompting.
+
+        * ``lifetime`` (``u``)
+
+          The allowed lifetime in seconds, after the frontend applies its
+          maximum.
+
+          The frontend enforces expiry with a monotonic timer, notifies the
+          application once and closes the session. A backend with its own
+          expiry timer should add a margin to this lifetime to allow the
+          frontend to expire first. If the backend expires first, it signals
+          ``SessionInvalidated``.
+
+        * ``app_identity_level`` (``s``)
+
+          The trust level of @app_id: ``sandboxed`` for an identity verified
+          by a sandbox engine, ``host`` for one derived from a host process,
+          or ``unidentified`` when no identity could be established. The
+          backend should display this distinction to the user.
+
+        The following results get returned via the @results vardict:
+
+        * ``certificate_der`` (``ay``)
+
+          Required on success. The selected leaf certificate, DER encoded.
+
+        * ``supported_mechanisms`` (``as``), ``permitted_operations`` (``as``)
+
+          Required on success and both non-empty. The frontend intersects
+          ``supported_mechanisms`` with the mechanisms it allows, and
+          ``permitted_operations`` with both what the application asked for in
+          ``operation_policy`` and what ``purpose`` allows. If either
+          intersection is empty, acquisition fails.
+
+        * ``chain_der`` (``aay``), ``chain_status`` (``s``),
+          ``token_display`` (``a{sv}``), ``key_type`` (``s``),
+          ``key_size`` (``u``), ``key_curve`` (``s``),
+          ``may_prompt_later`` (``b``)
+
+          Optional, as on the public interface, and forwarded only with the
+          types declared there.
+
+        * ``reason`` (``s``)
+
+          An optional stable symbol explaining a non-zero @response, forwarded
+          verbatim.
+    -->
+    <method name="AcquireCredential">
+      <arg type="o" name="handle" direction="in"/>
+      <arg type="o" name="session_handle" direction="in"/>
+      <arg type="s" name="app_id" direction="in"/>
+      <arg type="s" name="parent_window" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In4" value="QVariantMap"/>
+      <arg type="a{sv}" name="options" direction="in"/>
+      <arg type="u" name="response" direction="out"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out1" value="QVariantMap"/>
+      <arg type="a{sv}" name="results" direction="out"/>
+    </method>
+
+    <!--
+        Sign:
+        @handle: Object path for the :ref:`org.freedesktop.impl.portal.Request` object representing this call
+        @session_handle: Object path for the :ref:`org.freedesktop.impl.portal.Session` object
+        @app_id: App ID of the application
+        @parent_window: Identifier for the application window, see :doc:`window-identifiers`
+        @options: Vardict with optional further information
+        @response: Numeric response
+        @results: Vardict with the results of the call
+
+        Signs a digest with the private key associated with the grant.
+
+        The @options vardict carries ``mechanism`` (``s``), ``parameters``
+        (``a{sv}``) and ``data`` (``ay``), as on the public interface. The
+        frontend has checked that the grant permits the operation and the
+        mechanism, that ``parameters`` names a ``hash`` it knows, and that
+        ``data`` is exactly that digest's length. The backend still validates
+        the parameters against the key using its knowledge of the modulus
+        size.
+
+        The backend must enforce the mechanism's encoding and require a digest
+        of the declared hash's length. Mechanisms that sign unhashed messages
+        must not be offered.
+
+        For ``ECDSA``, ``parameters`` may carry ``signature_encoding``
+        (``s``), which the frontend validates as ``raw`` or ``der``. ``raw``
+        is the default and means r and s concatenated, each padded to the byte
+        length of the curve order, as produced by PKCS#11. ``der`` means the
+        ``Ecdsa-Sig-Value`` SEQUENCE of RFC 3279. A backend that implements
+        ECDSA must implement both, and must default to ``raw``.
+
+        For ``RSA_PSS``, ``parameters`` may carry ``mgf`` (``s``) and
+        ``salt_length`` (``u``). ``mgf`` is spelled ``MGF1-<hash>``, for
+        example ``MGF1-SHA256``; plain ``MGF1`` means MGF1 over ``hash``. A
+        backend must accept only this vocabulary. The defaults for omitted
+        keys are MGF1 over ``hash`` and a salt of that digest's length.
+
+        The @results vardict carries ``signature`` (``ay``), which is required
+        when @response is ``0``, and an optional ``reason`` (``s``) otherwise.
+    -->
+    <method name="Sign">
+      <arg type="o" name="handle" direction="in"/>
+      <arg type="o" name="session_handle" direction="in"/>
+      <arg type="s" name="app_id" direction="in"/>
+      <arg type="s" name="parent_window" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In4" value="QVariantMap"/>
+      <arg type="a{sv}" name="options" direction="in"/>
+      <arg type="u" name="response" direction="out"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out1" value="QVariantMap"/>
+      <arg type="a{sv}" name="results" direction="out"/>
+    </method>
+
+    <!--
+        GetCapabilities:
+        @app_id: App ID of the application
+        @options: Vardict with optional further information
+        @capabilities: Vardict describing what the backend can do
+
+        Reports what the backend can do. No window is shown.
+
+        The @capabilities vardict contains ``purposes`` (``as``),
+        ``operations`` (``as``), ``mechanisms`` (``as``),
+        ``protected_authentication_path`` (``b``) and ``has_display`` (``b``).
+        The frontend intersects the three lists with its own policy before
+        answering the application, forwards both booleans, and adds the
+        frontend capability values.
+    -->
+    <method name="GetCapabilities">
+      <arg type="s" name="app_id" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In1" value="QVariantMap"/>
+      <arg type="a{sv}" name="options" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QVariantMap"/>
+      <arg type="a{sv}" name="capabilities" direction="out"/>
+    </method>
+
+    <!--
+        SessionInvalidated:
+        @session_handle: Object path of the affected session
+        @reason: Why the session can no longer be used
+
+        Emitted when the backend can no longer honour a grant.
+
+        The frontend turns this into
+        :ref:`org.freedesktop.portal.experimental.Certificate1::GrantInvalidated`,
+        emitted to the connection that owns the session, and closes the
+        session. @reason is forwarded unchanged and should use the public
+        values ``token_removed``, ``policy``, ``backend_gone`` or ``error``.
+        Unknown values also reach applications. The frontend emits ``expired``
+        on its own timer; backends need not send it.
+
+        When the backend's bus name loses its owner, the frontend invalidates
+        every grant without requiring this signal.
+
+        Signals for unknown or closed sessions are ignored. Sessions without
+        a credential are closed without emitting ``GrantInvalidated``.
+    -->
+    <signal name="SessionInvalidated">
+      <arg type="o" name="session_handle"/>
+      <arg type="s" name="reason"/>
+    </signal>
+
+    <property name="version" type="u" access="read"/>
+  </interface>
+</node>
