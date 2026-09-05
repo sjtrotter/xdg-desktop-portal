@@ -9,6 +9,7 @@
 #include "account.h"
 #include "background.h"
 #include "camera.h"
+#include "certificate.h"
 #include "clipboard.h"
 #include "dynamic-launcher.h"
 #include "email.h"
@@ -428,6 +429,7 @@ static void
 init_experimental_portals (XdpContext *context)
 {
   static const XdpExperimentalPortal portals[] = {
+    { CERTIFICATE_EXPERIMENTAL_NAME, init_certificate },
     { WEB_AUTHENTICATION_EXPERIMENTAL_NAME, init_web_authentication },
     { NULL, NULL },
   };

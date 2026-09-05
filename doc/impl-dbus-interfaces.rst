@@ -44,4 +44,5 @@ variable.
 .. toctree::
    :hidden:
 
+   doc-org.freedesktop.impl.portal.experimental.Certificate.rst
    doc-org.freedesktop.impl.portal.experimental.WebAuthentication.rst

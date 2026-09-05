@@ -86,4 +86,5 @@ To make it survive a login, put it in a
 .. toctree::
    :hidden:
 
+   doc-org.freedesktop.portal.experimental.Certificate.rst
    doc-org.freedesktop.portal.experimental.WebAuthentication.rst

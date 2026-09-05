@@ -1,0 +1,443 @@
+<?xml version="1.0"?>
+<!--
+ SPDX-License-Identifier: LGPL-2.1-or-later
+ SPDX-FileCopyrightText: Copyright © the xdg-desktop-portal contributors
+-->
+
+<node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
+  <!--
+      org.freedesktop.portal.experimental.Certificate:
+      @short_description: Portal for using certificates and keys held on a security token
+
+      This interface lets applications use a certificate and its private key
+      without ever seeing the private key, and without talking to PKCS#11
+      modules, card readers or PIN entry themselves. The application asks for
+      a certificate that fits a purpose, the user picks one and authorizes its
+      use, and the application can then ask for signatures made with the
+      matching key.
+
+      The token is usually a smart card reached through a PKCS#11 module - a
+      PIV card, a national eID card, a hardware security key - but it may
+      equally be a TPM or a software key store. This interface names the
+      credential rather than the hardware: what crosses it is a certificate
+      and operations on the key behind it, never a PKCS#11 object, session or
+      token, and never a card reader.
+
+      The private key never crosses this interface. Neither does the PIN: the
+      backend is responsible for any PIN entry, and no key material, PIN value
+      or PIN source ever appears in an argument or a result.
+
+      A grant is a session.
+      :ref:`org.freedesktop.portal.experimental.Certificate.CreateSession`
+      creates an empty one,
+      :ref:`org.freedesktop.portal.experimental.Certificate.AcquireCredential`
+      fills it in with a certificate the user chose, and
+      :ref:`org.freedesktop.portal.Session.Close` ends it. A session holds at
+      most one credential for its whole life: a second
+      ``AcquireCredential`` on a session that already acquired one is
+      refused, and acquiring again means creating another session and asking
+      the user again. A grant is bound to the D-Bus connection that created
+      it, to the operations and mechanisms the frontend allowed, and it
+      always expires.
+
+      Expiry is the portal's. When a grant reaches the end of its lifetime
+      the portal emits
+      :ref:`org.freedesktop.portal.experimental.Certificate::GrantInvalidated`
+      with ``reason`` ``expired`` and closes the session, so an application
+      is told rather than finding out at its next
+      :ref:`org.freedesktop.portal.experimental.Certificate.Sign`. A backend
+      that expires the same grant on its own clock says so with its own
+      signal, and whichever arrives first, the application is told once.
+
+      This is an **experimental** interface. It is not exported unless
+      ``XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL`` contains ``certificate``, and
+      it can change or get removed without a version bump.
+
+      This documentation describes version 1 of this interface.
+  -->
+  <interface name="org.freedesktop.portal.experimental.Certificate">
+    <!--
+        CreateSession:
+        @options: Vardict with optional further information
+        @handle: Object path for the :ref:`org.freedesktop.portal.Request` object representing this call
+
+        Creates a grant session. The session starts out empty; call
+        :ref:`org.freedesktop.portal.experimental.Certificate.AcquireCredential`
+        on it to have the user select a certificate and authorize its use.
+
+        Supported keys in the @options vardict include:
+
+        * ``handle_token`` (``s``)
+
+          A string that will be used as the last element of the @handle. Must be a valid
+          object path element. See the :ref:`org.freedesktop.portal.Request` documentation for
+          more information about the @handle.
+
+        * ``session_handle_token`` (``s``)
+
+          A string that will be used as the last element of the session handle. Must be a
+          valid object path element. See the :ref:`org.freedesktop.portal.Session`
+          documentation for more information about the session handle.
+
+        The following results get returned via the :ref:`org.freedesktop.portal.Request::Response` signal:
+
+        * ``session_handle`` (``o``)
+
+          The session handle. An object path for the
+          :ref:`org.freedesktop.portal.Session` object representing the created
+          session.
+
+        A non-zero response carries an optional ``reason`` (``s``): the portal
+        emits ``session_closed`` when the session was closed before it could
+        be handed over, and otherwise forwards the backend's own.
+    -->
+    <method name="CreateSession">
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="QVariantMap"/>
+      <arg type="a{sv}" name="options" direction="in"/>
+      <arg type="o" name="handle" direction="out"/>
+    </method>
+
+    <!--
+        AcquireCredential:
+        @session_handle: Object path for the :ref:`org.freedesktop.portal.Session` object
+        @parent_window: Identifier for the application window, see :doc:`window-identifiers`
+        @options: Vardict with optional further information
+        @handle: Object path for the :ref:`org.freedesktop.portal.Request` object representing this call
+
+        Asks the user to select a certificate and authorize its use for the
+        given purpose. On success the session named by @session_handle becomes
+        a grant, and
+        :ref:`org.freedesktop.portal.experimental.Certificate.Sign` can be
+        called on it.
+
+        A session acquires at most once. If the session already acquired a
+        credential, or an acquisition on it is still in flight, the response
+        is ``2`` with ``reason`` ``grant_already_held`` and nothing is asked
+        of the user.
+
+        The vardicts below are closed vocabularies: a key this version does
+        not know is an error rather than a value that is quietly dropped,
+        because a filter or a policy that is silently ignored offers the user
+        more than the application asked for.
+
+        Supported keys in the @options vardict include:
+
+        * ``handle_token`` (``s``)
+
+          A string that will be used as the last element of the @handle. Must be a valid
+          object path element. See the :ref:`org.freedesktop.portal.Request` documentation for
+          more information about the @handle.
+
+        * ``activation_token`` (``s``)
+
+          A token that can be used to activate the chooser window, see
+          :doc:`window-identifiers`.
+
+        * ``purpose`` (``s``)
+
+          Required. What the credential is for. One of ``client_auth``,
+          ``signing``, ``email`` or ``ssh``. There is deliberately no value
+          meaning "anything": the purpose selects the consent wording, narrows
+          the certificates the user is offered, and bounds the operations the
+          grant may be used for. In this version every purpose bounds them to
+          ``sign``.
+
+        * ``certificate_filter`` (``a{sv}``)
+
+          Narrows the certificates offered to the user. All keys are optional
+          and are combined with a logical AND. The keys are ``issuers``
+          (``aay``, DER encoded issuer distinguished names), ``key_usage``
+          (``as``), ``eku`` (``as``, extended key usage OIDs),
+          ``key_algorithms`` (``as``), ``token_label`` (``s``) and
+          ``piv_slot`` (``s``, one of ``authentication``, ``signature``,
+          ``key_management`` or ``card_authentication``).
+
+          A filter narrows what is offered; it never widens it, and it is not
+          a security boundary.
+
+        * ``operation_policy`` (``a{sv}``)
+
+          The operations the application is asking for. ``sign`` (``b``) is
+          the only key this version defines, and an operation the policy does
+          not mention is asked for, so the default is ``{'sign': true}``. A
+          policy that asks for nothing is an error, not an empty grant.
+
+          This is where a later version asks for an operation which is not
+          signing, and it is a closed vocabulary now so that asking for one
+          this version does not have is an error rather than a grant that
+          silently does not carry it.
+
+        * ``requested_lifetime`` (``u``)
+
+          How long, in seconds, the application would like the grant to live.
+          This is a ceiling request, not a floor: the portal may grant less and
+          never grants more than its own maximum, which is advertised as
+          ``max_grant_lifetime`` by
+          :ref:`org.freedesktop.portal.experimental.Certificate.GetCapabilities`.
+          There is no renewal in this version; a grant that has expired is
+          replaced by a new session and a new consent.
+
+        * ``interaction_mode`` (``s``)
+
+          One of ``required`` (always prompt), ``allowed`` (prompt if needed,
+          the default) or ``forbidden`` (never prompt; a request that would
+          need a chooser or a PIN fails instead). The portal validates the
+          value and forwards it; the backend owns the windows and is the end
+          that honours it.
+
+        * ``reason`` (``s``)
+
+          A string that can be shown in the dialog to explain why the
+          credential is needed. This is application-supplied text; the backend
+          must present it as such and never in the position where it shows the
+          identity of the application.
+
+        The following results get returned via the :ref:`org.freedesktop.portal.Request::Response` signal:
+
+        * ``certificate_der`` (``ay``)
+
+          The selected leaf certificate, DER encoded. Always present when the
+          response is ``0``.
+
+        * ``chain_der`` (``aay``)
+
+          Ordered intermediate certificates, best effort.
+
+        * ``chain_status`` (``s``)
+
+          How complete ``chain_der`` is: ``complete``, ``partial`` or
+          ``leaf_only``. This describes completeness, not trust.
+
+        * ``token_display`` (``a{sv}``)
+
+          Token and reader identity for display only.
+
+        * ``key_type`` (``s``)
+
+          ``RSA`` or ``EC``.
+
+        * ``key_size`` (``u``)
+
+          Modulus size in bits, or curve size.
+
+        * ``key_curve`` (``s``)
+
+          The curve name, for EC keys.
+
+        * ``supported_mechanisms`` (``as``)
+
+          The mechanisms this grant may be used with, never empty. This is the
+          portal's allow list intersected with what the backend reported.
+
+        * ``permitted_operations`` (``as``)
+
+          What this grant may be used for, never empty. It is what the backend
+          reported, intersected with what ``operation_policy`` asked for and
+          with what ``purpose`` allows, so it is never wider than the request
+          the user was shown.
+
+        * ``expires_at`` (``t``)
+
+          When the grant expires, in seconds since the Unix epoch. This can be
+          sooner than ``requested_lifetime`` asked for. It is the wall clock
+          reading of the deadline taken at the moment of acquisition, and it
+          is for display: the portal enforces the lifetime on a monotonic
+          clock, so moving the system clock afterwards changes neither the
+          grant nor this number, and the two stop agreeing.
+
+        * ``may_prompt_later`` (``b``)
+
+          Whether a later ``Sign`` on this grant may show a window.
+
+        A non-zero response carries an optional ``reason`` (``s``): the portal
+        emits ``grant_already_held`` for a second acquisition, ``grant_gone``
+        when the session was closed while the user was deciding,
+        ``backend_protocol_error`` when the backend's answer does not satisfy
+        this interface - a required result missing or mistyped, or a grant
+        that covers nothing that was asked for - and otherwise forwards the
+        backend's own.
+    -->
+    <method name="AcquireCredential">
+      <arg type="o" name="session_handle" direction="in"/>
+      <arg type="s" name="parent_window" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In2" value="QVariantMap"/>
+      <arg type="a{sv}" name="options" direction="in"/>
+      <arg type="o" name="handle" direction="out"/>
+    </method>
+
+    <!--
+        Sign:
+        @session_handle: Object path for the :ref:`org.freedesktop.portal.Session` object
+        @parent_window: Identifier for the application window, see :doc:`window-identifiers`
+        @options: Vardict with optional further information
+        @handle: Object path for the :ref:`org.freedesktop.portal.Request` object representing this call
+
+        Signs a digest with the key of the certificate this grant is for.
+
+        This is a prehashed signing API: the caller hashes the message and
+        passes the digest, and the backend enforces the encoding the mechanism
+        requires. Naming the hash and requiring ``data`` to be that hash's
+        length is what makes the mechanism encoding well defined; it says
+        nothing about where the digest came from.
+
+        Supported keys in the @options vardict include:
+
+        * ``handle_token`` (``s``)
+
+          A string that will be used as the last element of the @handle. Must be a valid
+          object path element. See the :ref:`org.freedesktop.portal.Request` documentation for
+          more information about the @handle.
+
+        * ``operation_id`` (``s``)
+
+          An application-chosen string, returned unchanged in the results, so
+          that a result and a diagnostic can be correlated without correlating
+          them by content. It is not forwarded to the backend.
+
+        * ``mechanism`` (``s``)
+
+          Required. One of the names the grant reported in
+          ``supported_mechanisms``: ``RSA_PKCS1_V1_5``, ``RSA_PSS`` or
+          ``ECDSA``.
+
+        * ``parameters`` (``a{sv}``)
+
+          Whatever the mechanism needs, as a closed vocabulary:
+
+          * ``hash`` (``s``)
+
+            Required. Which digest ``data`` is. One of ``SHA1``, ``SHA224``,
+            ``SHA256``, ``SHA384`` or ``SHA512``; the ``SHA-256`` spelling is
+            accepted too.
+
+          * ``mgf`` (``s``)
+
+            ``RSA_PSS`` only. The mask generation function, spelled
+            ``MGF1-<hash>`` - for example ``MGF1-SHA256``. Plain ``MGF1``
+            means MGF1 over ``hash``, which is also the default when the key
+            is absent.
+
+          * ``salt_length`` (``u``)
+
+            ``RSA_PSS`` only. The salt length in bytes, defaulting to the
+            digest's length. The backend checks it against the modulus, which
+            is the only place the modulus size is known.
+
+          * ``signature_encoding`` (``s``)
+
+            ``ECDSA`` only. ``raw`` (the default): the signature is r and s
+            concatenated, each padded to the byte length of the curve order,
+            which is what PKCS#11 produces. ``der``: the signature is the
+            ``Ecdsa-Sig-Value`` SEQUENCE of RFC 3279.
+
+        * ``data`` (``ay``)
+
+          Required. The digest of the message under the ``hash`` named in
+          ``parameters``, and never the message itself. Its length must be
+          exactly that digest's length.
+
+        The following results get returned via the :ref:`org.freedesktop.portal.Request::Response` signal:
+
+        * ``signature`` (``ay``)
+
+          The signature.
+
+        * ``operation_id`` (``s``)
+
+          The ``operation_id`` from the options, unchanged.
+
+        A grant that does not exist, has already expired, or does not permit
+        the requested mechanism is a D-Bus error from this method, before a
+        :ref:`org.freedesktop.portal.Request` is handed back. The same
+        condition reached after that - the session closed, or the grant
+        expired, while the call was in flight - is a response of ``2`` with
+        ``reason`` ``grant_gone``, because by then there is a Request to
+        answer.
+
+        A non-zero response carries an optional ``reason`` (``s``): the portal
+        emits ``grant_gone`` as above and ``backend_protocol_error`` when the
+        backend answered ``0`` without a signature.
+    -->
+    <method name="Sign">
+      <arg type="o" name="session_handle" direction="in"/>
+      <arg type="s" name="parent_window" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In2" value="QVariantMap"/>
+      <arg type="a{sv}" name="options" direction="in"/>
+      <arg type="o" name="handle" direction="out"/>
+    </method>
+
+    <!--
+        GetCapabilities:
+        @options: Vardict with optional further information
+        @capabilities: Vardict describing what this portal and its backend can do
+
+        Reports what this portal can do, so that an application can adapt
+        without provoking a dialog. No window is shown and nothing is
+        authorized by this call.
+
+        The @options vardict is currently unused.
+
+        The @capabilities vardict contains:
+
+        * ``purposes`` (``as``)
+
+          The purposes this portal accepts.
+
+        * ``operations`` (``as``)
+
+          What a grant can be used for.
+
+        * ``mechanisms`` (``as``)
+
+          The signature mechanisms this portal allows.
+
+        * ``protected_authentication_path`` (``b``)
+
+          Whether the backend can use a PIN pad on the reader instead of an
+          on-screen PIN entry.
+
+        * ``has_display`` (``b``)
+
+          Whether the backend has anywhere to show a window. When it is
+          false, an ``interaction_mode`` of ``required`` cannot be honoured
+          and a request that would need a chooser or a PIN will fail.
+
+        * ``max_grant_lifetime`` (``u``)
+
+          The longest grant lifetime, in seconds, this portal will hand out.
+    -->
+    <method name="GetCapabilities">
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="QVariantMap"/>
+      <arg type="a{sv}" name="options" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QVariantMap"/>
+      <arg type="a{sv}" name="capabilities" direction="out"/>
+    </method>
+
+    <!--
+        GrantInvalidated:
+        @session_handle: Object path of the session whose grant is gone
+        @reason: Why the grant is gone
+
+        Emitted when a grant stops being usable before it was released. The
+        session is closed as well; this signal exists to say why. A session
+        which never acquired a credential has no grant to invalidate, so it
+        is closed without this signal.
+
+        It is emitted to the connection that owns the session and to no one
+        else: a session object path carries the owner's unique bus name, so a
+        broadcast would tell every application on the bus which peers hold
+        certificate grants and when they end.
+
+        @reason is one of ``expired``, ``token_removed``, ``policy``,
+        ``backend_gone`` or ``error``. ``expired`` is the portal's own, and
+        is emitted when the grant reaches the deadline it was given.
+        Consumers must tolerate values they do not know.
+    -->
+    <signal name="GrantInvalidated">
+      <arg type="o" name="session_handle"/>
+      <arg type="s" name="reason"/>
+    </signal>
+
+    <property name="version" type="u" access="read"/>
+  </interface>
+</node>
