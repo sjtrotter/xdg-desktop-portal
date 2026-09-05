@@ -65,3 +65,25 @@ replacement will be documented in :doc:`org.freedesktop.host.portal.Registry
    doc-org.freedesktop.portal.Trash.rst
    doc-org.freedesktop.portal.Usb.rst
    doc-org.freedesktop.portal.Wallpaper.rst
+
+Experimental portals are only available when they are explicitly enabled with
+the ``XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL`` environment variable, which
+holds a comma separated list of portal names. They are not covered by the
+usual stability promises: they can change or get removed without a version
+bump.
+
+``xdg-desktop-portal`` is usually started by D-Bus activation or by the user's
+systemd session, so the variable has to be in that environment rather than in
+a shell::
+
+   systemctl --user set-environment XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL=name
+   systemctl --user restart xdg-desktop-portal.service
+
+To make it survive a login, put it in a
+``~/.config/systemd/user/xdg-desktop-portal.service.d/`` drop-in with
+``Environment=``.
+
+.. toctree::
+   :hidden:
+
+   doc-org.freedesktop.portal.experimental.WebAuthentication.rst

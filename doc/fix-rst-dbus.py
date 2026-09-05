@@ -86,6 +86,11 @@ def split_sections(lines, output_prefix):
 
 def adjust_title(lines):
     title = lines[3].strip()
+    suffix = ""
+
+    if ".experimental." in title:
+        title = title.replace(".experimental.", ".")
+        suffix = " (Experimental)"
 
     if title.startswith("org.freedesktop.portal."):
         adjusted_title = title.replace("org.freedesktop.portal.", "")
@@ -104,7 +109,7 @@ def adjust_title(lines):
     if adjusted_title not in ["OpenURI", "ScreenCast"]:
         adjusted_title = "".join(x if x.islower() else f" {x}" for x in adjusted_title)
 
-    lines[3] = f"{adjusted_title}\n"
+    lines[3] = f"{adjusted_title}{suffix}\n"
 
 
 inputs = sys.argv[3:]
