@@ -132,3 +132,6 @@ typedef struct _XdpDbusImplAccess XdpDbusImplAccess;
 #define WALLPAPER_DBUS_IMPL_IFACE DESKTOP_DBUS_IMPL_IFACE ".Wallpaper"
 #define WALLPAPER_PERMISSION_TABLE "wallpaper"
 #define WALLPAPER_PERMISSION_ID "wallpaper"
+
+#define WEB_AUTHENTICATION_X1_DBUS_IFACE DESKTOP_DBUS_IFACE ".WebAuthentication.X1"
+#define WEB_AUTHENTICATION_X1_DBUS_IMPL_IFACE DESKTOP_DBUS_IMPL_IFACE ".WebAuthentication.X1"
