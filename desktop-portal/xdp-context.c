@@ -392,6 +392,51 @@ init_portal_in_fiber (XdpContext   *context,
   g_ptr_array_add (context->pending_inits, g_steal_pointer (&f));
 }
 
+/* Experimental portals live in the org.freedesktop.portal.experimental
+ * namespace, are not covered by the usual stability promises, and can change
+ * or get removed without a version bump. None of them is exported unless
+ * XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL names it in a comma separated list.
+ */
+static gboolean
+xdp_context_is_experimental_enabled (const char *name)
+{
+  const char *env;
+  g_auto(GStrv) names = NULL;
+
+  env = g_getenv ("XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL");
+  if (env == NULL || *env == '\0')
+    return FALSE;
+
+  names = g_strsplit (env, ",", -1);
+  for (size_t i = 0; names[i]; i++)
+    {
+      if (g_strcmp0 (g_strstrip (names[i]), name) == 0)
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
+typedef struct _XdpExperimentalPortal
+{
+  const char *name;
+  DexFiberFunc init;
+} XdpExperimentalPortal;
+
+static void
+init_experimental_portals (XdpContext *context)
+{
+  static const XdpExperimentalPortal portals[] = {
+    { NULL, NULL },
+  };
+
+  for (size_t i = 0; portals[i].name; i++)
+    {
+      if (xdp_context_is_experimental_enabled (portals[i].name))
+        init_portal_in_fiber (context, portals[i].init);
+    }
+}
+
 static void
 await_pending_inits (XdpContext *context)
 {
@@ -504,6 +549,8 @@ xdp_context_register (XdpContext       *context,
   init_usb (context);
 #endif
   init_registry (context);
+
+  init_experimental_portals (context);
 
   await_pending_inits (context);
 
