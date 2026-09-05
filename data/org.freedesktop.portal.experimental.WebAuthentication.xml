@@ -44,11 +44,20 @@
         @start_uri must be an absolute ``https`` URI with a host.
 
         @completion_uri must be an absolute URI with a host, no userinfo and no
-        wildcard. It is matched against every top level navigation, on the
-        parsed URI: scheme and host compared case insensitively, effective
-        ports compared with default ports normalised, and paths compared
-        exactly. Query and fragment carry the result of the flow and take no
-        part in matching. Subframe navigations do not end the flow.
+        wildcard. It is matched against every navigation the web view is asked
+        to make — **in any frame**, not only the top level one — on the parsed
+        URI: scheme and host compared case insensitively, effective ports
+        compared with default ports normalised, and paths compared exactly.
+        Query and fragment carry the result of the flow and take no part in
+        matching.
+
+        A match ends the flow and **is never loaded**: the matched URI carries
+        the result of the sign-in, and fetching it would send that result to a
+        page which has no part in the exchange. This is the rule in both
+        directions — a subframe cannot quietly fetch the completion URI, and a
+        subframe navigation to it does end the flow rather than being ignored.
+        Backends are not asked to tell frames apart, because engines do not
+        reliably expose that at the moment the decision must be made.
 
         A malformed request is a D-Bus error from this method, before any
         backend is asked and any window is opened.

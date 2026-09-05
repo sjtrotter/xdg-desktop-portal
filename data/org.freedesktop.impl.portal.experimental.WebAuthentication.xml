@@ -10,8 +10,10 @@
       @short_description: Backend for the web sign-in portal
 
       This backend interface owns the web view: it opens the window, watches
-      every top level navigation, stops the flow when the completion URI is
-      reached, and reports the URI it stopped on.
+      every navigation the view is asked to make in any frame, stops the flow
+      when the completion URI is reached, and reports the URI it stopped on.
+      A matched navigation must never be loaded, in any frame: it carries the
+      result of the sign-in.
 
       Everything the backend is told has already been validated and, where
       policy applies, already narrowed by the frontend. ``session_mode`` in
