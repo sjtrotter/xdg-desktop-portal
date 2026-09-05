@@ -65,6 +65,17 @@ xdp_session_dex_on_signal_closed (XdpDbusSession *object,
                                  NULL);
 }
 
+/* Take the session off the bus and give its object path back. Every way a
+ * session ends does this; they differ only in who is told and whether the
+ * backend still has to be closed. */
+static void
+session_unexport (XdpSessionDex *session)
+{
+  g_dbus_interface_skeleton_unexport (G_DBUS_INTERFACE_SKELETON (session));
+  session->exported = FALSE;
+  xdp_context_unclaim_object_path (session->context, session->id);
+}
+
 static gboolean
 xdp_session_dex_handle_close (XdpDbusSession        *object,
                               GDBusMethodInvocation *invocation)
@@ -78,9 +89,7 @@ xdp_session_dex_handle_close (XdpDbusSession        *object,
       return G_DBUS_METHOD_INVOCATION_HANDLED;
     }
 
-  g_dbus_interface_skeleton_unexport (G_DBUS_INTERFACE_SKELETON (session));
-  session->exported = FALSE;
-  xdp_context_unclaim_object_path (session->context, session->id);
+  session_unexport (session);
 
   dex_await (xdp_dbus_impl_session_call_close_future (session->impl_session),
              &error);
@@ -111,9 +120,7 @@ xdp_session_dex_dispose (GObject *object)
 
   if (session->exported)
     {
-      g_dbus_interface_skeleton_unexport (G_DBUS_INTERFACE_SKELETON (session));
-      session->exported = FALSE;
-      xdp_context_unclaim_object_path (session->context, session->id);
+      session_unexport (session);
 
       xdp_dbus_impl_session_call_close (session->impl_session, NULL, NULL, NULL);
     }
@@ -159,9 +166,7 @@ on_peer_disconnect (XdpContext *context,
   if (!session->exported)
     return;
 
-  g_dbus_interface_skeleton_unexport (G_DBUS_INTERFACE_SKELETON (session));
-  session->exported = FALSE;
-  xdp_context_unclaim_object_path (session->context, session->id);
+  session_unexport (session);
 
   xdp_dbus_impl_session_call_close (session->impl_session, NULL, NULL, NULL);
   xdp_session_dex_emit_closed (session);
@@ -181,9 +186,7 @@ on_impl_closed (XdpDbusImplSession *object,
   xdp_dbus_session_emit_closed (XDP_DBUS_SESSION (session),
                                 g_variant_builder_end (&details_builder));
 
-  g_dbus_interface_skeleton_unexport (G_DBUS_INTERFACE_SKELETON (session));
-  session->exported = FALSE;
-  xdp_context_unclaim_object_path (session->context, session->id);
+  session_unexport (session);
 
   xdp_session_dex_emit_closed (session);
 }
@@ -334,6 +337,30 @@ gboolean
 xdp_session_dex_is_closed (XdpSessionDex *session)
 {
   return !session->exported;
+}
+
+/* Close a session the portal itself is ending: the application is told, the
+ * backend is told, and the object path goes away. Session.Close() from the
+ * application does not notify the application. */
+void
+xdp_session_dex_close (XdpSessionDex *session)
+{
+  g_auto(GVariantBuilder) details_builder =
+    G_VARIANT_BUILDER_INIT (G_VARIANT_TYPE_VARDICT);
+
+  g_return_if_fail (XDP_IS_SESSION_DEX (session));
+
+  if (!session->exported)
+    return;
+
+  xdp_dbus_session_emit_closed (XDP_DBUS_SESSION (session),
+                                g_variant_builder_end (&details_builder));
+
+  session_unexport (session);
+
+  xdp_dbus_impl_session_call_close (session->impl_session, NULL, NULL, NULL);
+
+  xdp_session_dex_emit_closed (session);
 }
 
 XdpAppInfo *
