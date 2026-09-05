@@ -28,4 +28,6 @@ void xdp_request_dex_emit_response (XdpRequestDex                *request,
 
 void xdp_request_dex_close_impl (XdpRequestDex *request);
 
+gboolean xdp_request_dex_is_closed (XdpRequestDex *request);
+
 const char * xdp_request_dex_get_object_path (XdpRequestDex *request);

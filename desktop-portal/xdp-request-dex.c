@@ -348,6 +348,18 @@ xdp_request_dex_close_impl (XdpRequestDex *request)
   request_close_impl (request);
 }
 
+/* A request stops being exported when the application closes it, or when the
+ * application goes away. A portal that has state to commit when a call
+ * succeeds has to know: the response would be dropped, but the state would
+ * not. */
+gboolean
+xdp_request_dex_is_closed (XdpRequestDex *request)
+{
+  g_return_val_if_fail (XDP_IS_REQUEST_DEX (request), TRUE);
+
+  return !request->exported;
+}
+
 const char *
 xdp_request_dex_get_object_path (XdpRequestDex *request)
 {
