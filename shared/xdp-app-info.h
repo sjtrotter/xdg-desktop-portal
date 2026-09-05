@@ -52,6 +52,8 @@ gboolean xdp_app_info_is_valid_sub_app_id (XdpAppInfo *app_info,
 
 gboolean xdp_app_info_has_network (XdpAppInfo *app_info);
 
+int xdp_app_info_get_pidfd (XdpAppInfo *app_info);
+
 gboolean xdp_app_info_get_pidns (XdpAppInfo  *app_info,
                                  ino_t       *pidns_id_out,
                                  GError     **error);

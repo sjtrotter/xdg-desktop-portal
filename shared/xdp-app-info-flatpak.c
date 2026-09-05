@@ -682,6 +682,7 @@ open_flatpak_info (int      pid,
 
 static XdpAppInfo *
 xdp_app_info_flatpak_new_testing (const char  *sender,
+                                  int         *pidfd,
                                   GError     **error)
 {
   g_autoptr (XdpAppInfoFlatpak) app_info_flatpak = NULL;
@@ -746,6 +747,14 @@ xdp_app_info_flatpak_new_testing (const char  *sender,
                                      "flags", flags,
                                      "id", id,
                                      "instance", instance,
+                                     /* The real thing carries the bwrap
+                                      * instance's pidfd, because there is a
+                                      * sandbox to point at. Here there is
+                                      * none, so the caller's own is the
+                                      * closest thing -- and without any
+                                      * pidfd, nothing a portal derives from
+                                      * the calling process can be tested. */
+                                     "pidfd", g_steal_fd (pidfd),
                                      "sender", sender,
                                      NULL);
 
@@ -791,7 +800,7 @@ xdp_app_info_flatpak_new (const char  *sender,
           return NULL;
         }
 
-      return xdp_app_info_flatpak_new_testing (sender, error);
+      return xdp_app_info_flatpak_new_testing (sender, pidfd, error);
     }
 
   info_fd = open_flatpak_info (pid, error);

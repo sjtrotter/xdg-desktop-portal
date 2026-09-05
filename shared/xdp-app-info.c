@@ -562,6 +562,23 @@ xdp_app_info_has_network (XdpAppInfo *app_info)
   return (priv->flags & XDP_APP_INFO_FLAG_HAS_NETWORK) != 0;
 }
 
+/* The pidfd of the calling process, or -1. Borrowed: it stays owned by the
+ * XdpAppInfo. A pidfd holds a reference to the kernel's struct pid, so for as
+ * long as this fd is open the process's pid number is not recycled, even after
+ * the process dies. That is what makes a pid read out of it safe to compare
+ * against another. */
+int
+xdp_app_info_get_pidfd (XdpAppInfo *app_info)
+{
+  XdpAppInfoPrivate *priv;
+
+  g_return_val_if_fail (XDP_IS_APP_INFO (app_info), -1);
+
+  priv = xdp_app_info_get_instance_private (app_info);
+
+  return priv->pidfd;
+}
+
 gboolean
 xdp_app_info_get_pidns (XdpAppInfo  *app_info,
                         ino_t       *pidns_id_out,
