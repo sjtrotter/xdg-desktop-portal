@@ -22,6 +22,7 @@ typedef struct _XdpRequestDex
   char *id;
   gboolean exported;
   gboolean responded;
+  gboolean impl_closed;
 } XdpRequestDex;
 
 static void xdp_request_skeleton_iface_init (XdpDbusRequestIface *iface);
@@ -31,6 +32,16 @@ G_DEFINE_FINAL_TYPE_WITH_CODE (XdpRequestDex,
                                XDP_DBUS_TYPE_REQUEST_SKELETON,
                                G_IMPLEMENT_INTERFACE (XDP_DBUS_TYPE_REQUEST,
                                                       xdp_request_skeleton_iface_init))
+
+static void
+request_close_impl (XdpRequestDex *request)
+{
+  if (request->impl_closed)
+    return;
+
+  request->impl_closed = TRUE;
+  xdp_dbus_impl_request_call_close (request->impl_request, NULL, NULL, NULL);
+}
 
 static void
 xdp_request_dex_on_signal_response (XdpDbusRequest *object,
@@ -72,12 +83,16 @@ xdp_request_dex_handle_close (XdpDbusRequest        *object,
   request->exported = FALSE;
   xdp_context_unclaim_object_path (request->context, request->id);
 
-  dex_await (xdp_dbus_impl_request_call_close_future (request->impl_request),
-             &error);
-  if (error)
+  if (!request->impl_closed)
     {
-      g_dbus_method_invocation_return_gerror (invocation, error);
-      return G_DBUS_METHOD_INVOCATION_HANDLED;
+      request->impl_closed = TRUE;
+      dex_await (xdp_dbus_impl_request_call_close_future (request->impl_request),
+                 &error);
+      if (error)
+        {
+          g_dbus_method_invocation_return_gerror (invocation, error);
+          return G_DBUS_METHOD_INVOCATION_HANDLED;
+        }
     }
 
   xdp_dbus_request_complete_close (XDP_DBUS_REQUEST (request), invocation);
@@ -103,7 +118,7 @@ xdp_request_dex_dispose (GObject *object)
                                        XDG_DESKTOP_PORTAL_RESPONSE_OTHER,
                                        NULL);
 
-      xdp_dbus_impl_request_call_close (request->impl_request, NULL, NULL, NULL),
+      request_close_impl (request);
 
       g_dbus_interface_skeleton_unexport (G_DBUS_INTERFACE_SKELETON (request));
       request->exported = FALSE;
@@ -181,7 +196,7 @@ on_peer_disconnect (XdpContext *context,
   if (!request->exported)
     return;
 
-  xdp_dbus_impl_request_call_close (request->impl_request, NULL, NULL, NULL),
+  request_close_impl (request);
 
   g_dbus_interface_skeleton_unexport (G_DBUS_INTERFACE_SKELETON (request));
   request->exported = FALSE;
@@ -321,6 +336,15 @@ xdp_request_dex_emit_response (XdpRequestDex                *request,
   xdp_dbus_request_emit_response (XDP_DBUS_REQUEST (request),
                                   response,
                                   results);
+}
+
+/* Close the backend request while keeping the frontend request exported. */
+void
+xdp_request_dex_close_impl (XdpRequestDex *request)
+{
+  g_return_if_fail (XDP_IS_REQUEST_DEX (request));
+
+  request_close_impl (request);
 }
 
 const char *
