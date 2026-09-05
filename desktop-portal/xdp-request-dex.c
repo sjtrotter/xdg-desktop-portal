@@ -323,6 +323,15 @@ xdp_request_dex_emit_response (XdpRequestDex                *request,
                                   results);
 }
 
+/* TRUE once the application closed the request or left the bus. */
+gboolean
+xdp_request_dex_is_closed (XdpRequestDex *request)
+{
+  g_return_val_if_fail (XDP_IS_REQUEST_DEX (request), TRUE);
+
+  return !request->exported;
+}
+
 const char *
 xdp_request_dex_get_object_path (XdpRequestDex *request)
 {
