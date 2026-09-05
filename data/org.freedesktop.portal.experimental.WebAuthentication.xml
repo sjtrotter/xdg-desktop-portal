@@ -1,0 +1,173 @@
+<?xml version="1.0"?>
+<!--
+ SPDX-License-Identifier: LGPL-2.1-or-later
+ SPDX-FileCopyrightText: Copyright © the xdg-desktop-portal contributors
+-->
+
+<node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
+  <!--
+      org.freedesktop.portal.experimental.WebAuthentication:
+      @short_description: Portal for completing a web sign-in flow
+
+      This interface lets an application hand a web sign-in flow to the
+      desktop. The application says where the flow starts and which URI ends
+      it; the portal opens a web view it controls, and answers with the URI
+      the flow finished on. Everything in between - cookies, redirects,
+      client certificate prompts, PIN entry - happens outside the application.
+
+      The application never sees the web view, and the portal never gives the
+      application anything but the completion URI it asked for: the completion
+      URI in the response is checked against the one that was requested before
+      it is handed over.
+
+      This is not a browser and not a general purpose web view. It exists so
+      that an application does not have to embed one in order to sign in.
+
+      This is an **experimental** interface. It is not exported unless
+      ``XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL`` contains
+      ``web-authentication``, and it can change or get removed without a
+      version bump.
+
+      This documentation describes version 1 of this interface.
+  -->
+  <interface name="org.freedesktop.portal.experimental.WebAuthentication">
+    <!--
+        Start:
+        @parent_window: Identifier for the application window, see :doc:`window-identifiers`
+        @start_uri: The URI to open
+        @completion_uri: The URI whose navigation ends the flow
+        @options: Vardict with optional further information
+        @handle: Object path for the :ref:`org.freedesktop.portal.Request` object representing this call
+
+        Starts a web sign-in flow.
+
+        A sandboxed application that has no network access cannot call this
+        method: the response would be an answer fetched from the network, so
+        a sandbox which is not allowed to reach the network must not be able
+        to reach it through the portal either. The call fails with
+        ``org.freedesktop.portal.Error.NotAllowed``.
+
+        @start_uri must be an absolute ``https`` URI with a host.
+
+        @completion_uri must be an absolute URI with no userinfo. An ``http``
+        or ``https`` completion URI must name a host. A private-use scheme
+        redirect URI as described in :rfc:`8252` section 7.1 - for example
+        ``com.example.app:/oauth2redirect`` - has no authority at all, and is
+        accepted with only a path; it is then matched on its scheme and its
+        path. A completion URI which names neither a host nor a path is
+        refused, because there would be nothing to match on.
+
+        A wildcard is not a pattern here and is refused: a host containing
+        ``*`` is a D-Bus error, not a match against every subdomain.
+
+        @completion_uri is matched against every navigation the web view is
+        asked to make - **in any frame**, not only the top level one. Both
+        URIs are parsed before they are compared, so the comparison is on
+        components and not on the two strings:
+
+        * the scheme and the host are compared case insensitively, and a URI
+          with a host never matches one without;
+        * the port is compared with the default port of the scheme filled in,
+          so ``https://example.com/x`` and ``https://example.com:443/x``
+          are the same URI, and a private-use scheme has no default port;
+        * the path is compared exactly, on the form GLib's URI parser
+          produces;
+        * the query and the fragment carry the result of the flow and take no
+          part in matching.
+
+        Parsing normalises the path and the host, so these are equal and all
+        of them match: ``/%63allback`` and ``/callback``, because an escape
+        which does not have to be one is decoded; ``/call%2fback`` and
+        ``/call%2Fback``, because an escape which does have to be one keeps
+        uppercase hex; ``/a/../callback``, ``/./callback`` and ``/callback``,
+        because dot segments are resolved; and an internationalised host and
+        its punycode spelling, because the host is converted to punycode.
+
+        Two differences that look like equivalences are not, and both fail
+        closed: an empty path and ``/`` are different paths, so
+        ``https://example.com`` never matches ``https://example.com/``; and a
+        host with a trailing dot is a different host.
+
+        A match ends the flow and **is never loaded**: the matched URI carries
+        the result of the sign-in, and fetching it would send that result to a
+        page which has no part in the exchange. This is the rule in both
+        directions - a subframe cannot quietly fetch the completion URI, and a
+        subframe navigation to it does end the flow rather than being ignored.
+        Backends are not asked to tell frames apart, because engines do not
+        reliably expose that at the moment the decision must be made.
+
+        A malformed request is a D-Bus error from this method, before any
+        backend is asked and any window is opened.
+
+        Supported keys in the @options vardict include:
+
+        * ``handle_token`` (``s``)
+
+          A string that will be used as the last element of the @handle. Must be a valid
+          object path element. See the :ref:`org.freedesktop.portal.Request` documentation for
+          more information about the @handle.
+
+        * ``activation_token`` (``s``)
+
+          A token that can be used to activate the window, see
+          :doc:`window-identifiers`.
+
+        * ``session_mode`` (``s``)
+
+          Which web storage the flow uses: ``shared`` (the default) or
+          ``ephemeral``. This is a web storage mode, not an
+          :ref:`org.freedesktop.portal.Session` - this interface creates no
+          session object. ``shared`` means shared between flows run by this
+          backend, never with the user's browser. ``ephemeral`` means a data
+          store made for this flow and destroyed with it. An unknown value is
+          an error, not a fallback.
+
+        * ``timeout`` (``u``)
+
+          How long, in seconds, the flow may take. The default is 300 and any
+          value above the ceiling of 900 is clamped to it. The portal keeps
+          this deadline: when it passes, the portal closes the backend's
+          request so that the window goes away, and the response is ``2``
+          with ``reason`` ``timeout``. The value is passed on to the backend
+          as well, which may end the flow sooner. An application that wants
+          to give up before then calls
+          :ref:`org.freedesktop.portal.Request.Close`.
+
+        * ``title`` (``s``)
+
+          A short hint about what the sign-in is for. This is
+          application-supplied text and is shown as such, never as the
+          identity of the window.
+
+        The following results get returned via the :ref:`org.freedesktop.portal.Request::Response` signal:
+
+        * ``completion_uri`` (``s``)
+
+          The matched URI, complete and undecoded, including query and
+          fragment. Present only when the response is ``0``. The portal
+          re-checks this value against the @completion_uri it forwarded before
+          emitting it; if it does not match, the response becomes ``2`` with
+          ``reason`` ``backend_completion_mismatch`` and the URI is discarded.
+
+        * ``reason`` (``s``)
+
+          An optional stable symbol explaining a non-zero response. The portal
+          itself emits ``timeout``, ``backend_disappeared``,
+          ``backend_completion_mismatch`` and ``backend_protocol_error``, and
+          forwards whatever the backend gave, for instance ``timeout``,
+          ``no_display``, ``user_cancelled`` or ``credential_unavailable``. It
+          is a diagnostic, never a substitute for the response code, and
+          consumers must tolerate its absence and values they do not know.
+    -->
+    <method name="Start">
+      <arg type="s" name="parent_window" direction="in"/>
+      <arg type="s" name="start_uri" direction="in"/>
+      <arg type="s" name="completion_uri" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In3" value="QVariantMap"/>
+      <arg type="a{sv}" name="options" direction="in"/>
+      <arg type="o" name="handle" direction="out"/>
+    </method>
+
+    <property name="version" type="u" access="read"/>
+  </interface>
+</node>

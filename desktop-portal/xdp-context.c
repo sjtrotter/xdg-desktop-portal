@@ -35,6 +35,7 @@
 #include "trash.h"
 #include "usb.h"
 #include "wallpaper.h"
+#include "web-authentication.h"
 #include "xdp-app-info-registry.h"
 #include "xdp-dbus.h"
 #include "xdp-documents.h"
@@ -427,6 +428,7 @@ static void
 init_experimental_portals (XdpContext *context)
 {
   static const XdpExperimentalPortal portals[] = {
+    { WEB_AUTHENTICATION_EXPERIMENTAL_NAME, init_web_authentication },
     { NULL, NULL },
   };
 

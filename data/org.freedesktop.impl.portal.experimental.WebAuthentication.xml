@@ -1,0 +1,121 @@
+<?xml version="1.0"?>
+<!--
+ SPDX-License-Identifier: LGPL-2.1-or-later
+ SPDX-FileCopyrightText: Copyright © the xdg-desktop-portal contributors
+-->
+
+<node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
+  <!--
+      org.freedesktop.impl.portal.experimental.WebAuthentication:
+      @short_description: Backend for the web sign-in portal
+
+      This backend interface owns the web view: it opens the window, watches
+      every navigation the view is asked to make in any frame, stops the flow
+      when the completion URI is reached, and reports the URI it stopped on.
+      A matched navigation must never be loaded, in any frame: it carries the
+      result of the sign-in.
+
+      Everything the backend is told has been validated by the frontend, and
+      the values it is told are the ones the frontend decided: ``timeout`` has
+      already been clamped, and ``session_mode`` arrives as a decision rather
+      than a request, so a backend that cannot honour ``ephemeral`` must fail
+      rather than quietly use the shared store.
+
+      This is an **experimental** interface and can change or get removed
+      without a version bump.
+  -->
+  <interface name="org.freedesktop.impl.portal.experimental.WebAuthentication">
+    <!--
+        Start:
+        @handle: Object path for the :ref:`org.freedesktop.impl.portal.Request` object representing this call
+        @app_id: App ID of the application
+        @parent_window: Identifier for the application window, see :doc:`window-identifiers`
+        @start_uri: The URI to open
+        @completion_uri: The URI whose navigation ends the flow
+        @options: Vardict with optional further information
+        @response: Numeric response
+        @results: Vardict with the results of the call
+
+        Runs a web sign-in flow.
+
+        @app_id is derived by the frontend. An empty string means the frontend
+        could not establish one; the backend must then say that the
+        application is unidentified rather than show an empty name or anything
+        the application supplied.
+
+        Supported keys in the @options vardict include:
+
+        * ``activation_token`` (``s``)
+
+          Passed through unchanged; the backend decides whether to use it.
+
+        * ``session_mode`` (``s``)
+
+          ``shared`` or ``ephemeral``. Already validated.
+
+        * ``timeout`` (``u``)
+
+          Seconds, already clamped to the ceiling. The frontend runs this
+          deadline too: when it passes it calls ``Close()`` on @handle and
+          answers the application itself, so a backend that never answers is
+          not a request that never ends. The backend still owns the window and
+          should end the flow on its own deadline; whichever end reaches it
+          first, the window has to go away.
+
+        * ``title`` (``s``)
+
+          Untrusted application text, already length limited.
+
+        * ``app_identity_level`` (``s``)
+
+          How much @app_id can be trusted: ``sandboxed`` when a sandbox engine
+          vouched for it, ``host`` when it was derived from a host process,
+          and ``unidentified`` when the frontend could not establish one at
+          all. The backend renders the difference; it never re-derives it.
+
+        ``handle_token`` is not forwarded, and neither are keys the frontend
+        does not know.
+
+        The following results get returned via the @results vardict:
+
+        * ``completion_uri`` (``s``)
+
+          The matched URI, complete and undecoded, obtained from the web engine
+          rather than reconstructed, including query and fragment. Present only
+          when @response is ``0``. The frontend re-checks it against the
+          @completion_uri it passed in before handing it to the application,
+          comparing the two on their parsed components; see
+          :ref:`org.freedesktop.portal.experimental.WebAuthentication.Start`
+          for the rule.
+
+          @completion_uri is an ``http`` or ``https`` URI with a host, or a
+          private-use scheme redirect URI as described in :rfc:`8252` section
+          7.1 - for example ``com.example.app:/oauth2redirect`` - which has no
+          authority and is matched on its scheme and its path. An engine that
+          refuses to navigate to a scheme it does not know still has to report
+          the navigation it refused, because that navigation is the answer.
+
+        * ``reason`` (``s``)
+
+          An optional stable symbol explaining a non-zero @response, for
+          instance ``timeout``, ``no_display``, ``no_engine``,
+          ``user_cancelled``, ``session_terminated`` or
+          ``credential_unavailable``. The frontend forwards it verbatim, so a
+          backend that invents a value hands it straight to applications.
+    -->
+    <method name="Start">
+      <arg type="o" name="handle" direction="in"/>
+      <arg type="s" name="app_id" direction="in"/>
+      <arg type="s" name="parent_window" direction="in"/>
+      <arg type="s" name="start_uri" direction="in"/>
+      <arg type="s" name="completion_uri" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In5" value="QVariantMap"/>
+      <arg type="a{sv}" name="options" direction="in"/>
+      <arg type="u" name="response" direction="out"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out1" value="QVariantMap"/>
+      <arg type="a{sv}" name="results" direction="out"/>
+    </method>
+
+    <property name="version" type="u" access="read"/>
+  </interface>
+</node>
