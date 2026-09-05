@@ -397,6 +397,21 @@ on_session_closed (XdpSessionDex *session,
                        xdp_session_dex_get_object_path (session));
 }
 
+/* The store holds either sessions or wrappers around them. A wrapper begins
+ * with its parent instance, so the session inside one is never at offset 0,
+ * and offset 0 means the stored object is the session itself. */
+static XdpSessionDex *
+session_from_wrapper (XdpSessionDexStore *store,
+                      gpointer            session_wrapper)
+{
+  if (store->session_offset == 0)
+    return XDP_SESSION_DEX (session_wrapper);
+
+  return XDP_SESSION_DEX (G_STRUCT_MEMBER (XdpSessionDex *,
+                                           session_wrapper,
+                                           store->session_offset));
+}
+
 void
 xdp_session_dex_store_take_session (XdpSessionDexStore *store,
                                     gpointer            session_wrapper)
@@ -404,8 +419,7 @@ xdp_session_dex_store_take_session (XdpSessionDexStore *store,
   g_autoptr(GObject) owned_wrapper = G_OBJECT (session_wrapper);
   XdpSessionDex *session;
 
-  session = XDP_SESSION_DEX (G_STRUCT_MEMBER_P (owned_wrapper,
-                                                store->session_offset));
+  session = session_from_wrapper (store, owned_wrapper);
 
   if (!session || xdp_session_dex_is_closed (session))
     return;
@@ -432,8 +446,7 @@ xdp_session_dex_store_lookup_session (XdpSessionDexStore *store,
   if (!session_wrapper)
     return NULL;
 
-  session = XDP_SESSION_DEX (G_STRUCT_MEMBER_P (session_wrapper,
-                                                store->session_offset));
+  session = session_from_wrapper (store, session_wrapper);
 
   if (app_info && xdp_session_dex_get_app_info (session) != app_info)
     return NULL;
