@@ -426,11 +426,12 @@ static const char * const certificate_signature_encodings[] = {
   NULL,
 };
 
-/* What keeps Sign from being a general signing oracle is that 'data' is a
- * digest and nothing else: the caller names the hash, and the length has to
- * agree with it, so no structure the caller chose can be signed whole. The
- * backend enforces this too, but it is a property of the interface rather
- * than of one backend, so it is enforced here as well. */
+/* 'data' is a digest and nothing else: the caller names the hash, and the
+ * length has to agree with it. That refuses a signature over bytes the caller
+ * did not hash, and refuses raw v1.5 padding of an arbitrary blob; it does not
+ * make Sign anything less than a signing capability over whatever the caller
+ * hashes. The backend enforces this too, but it is a property of the interface
+ * rather than of one backend, so it is enforced here as well. */
 static gboolean
 check_sign_parameters (GVariant  *options,
                        GError   **error)

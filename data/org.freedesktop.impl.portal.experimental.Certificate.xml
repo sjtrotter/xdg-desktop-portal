@@ -167,6 +167,12 @@
         that digest's length. A backend must not accept a ``data`` of some
         other length, and must not offer a mechanism that signs a message.
 
+        The property this establishes is narrow: a caller cannot obtain a
+        signature over bytes it did not hash itself, and cannot have an
+        arbitrary blob wrapped in raw PKCS#1 v1.5 padding and signed. It is
+        still a signing capability over any message the caller chooses to
+        hash. A backend must not describe it to the user as anything more.
+
         For ``ECDSA``, ``parameters`` may carry ``signature_encoding``
         (``s``), which the frontend validates as ``raw`` or ``der``. ``raw``
         is the default and means r and s concatenated, each padded to the byte

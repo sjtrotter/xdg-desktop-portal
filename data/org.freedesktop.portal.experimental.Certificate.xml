@@ -314,9 +314,17 @@
           Required. The digest of the message under the ``hash`` named in
           ``parameters``, and never the message itself. Its length must be
           exactly that digest's length; a request whose ``data`` is a
-          different length is refused. This is what keeps ``Sign`` from being
-          a general signing oracle for the key on the token: the application
-          cannot get a structure of its own choosing signed whole.
+          different length is refused.
+
+          What that rule buys is worth stating exactly, because it is less
+          than it looks. The caller cannot obtain a signature over bytes it
+          did not hash itself, and it cannot have an arbitrary blob wrapped
+          in raw PKCS#1 v1.5 padding and signed — a structure whose meaning
+          the caller chose cannot be handed over whole. It remains a signing
+          capability over any message the caller cares to hash, as every
+          signing interface is. What bounds it is the grant: its ``purpose``,
+          its expiry, its ``permitted_operations``, and the consent the user
+          gave for them.
 
         The following results get returned via the :ref:`org.freedesktop.portal.Request::Response` signal:
 
