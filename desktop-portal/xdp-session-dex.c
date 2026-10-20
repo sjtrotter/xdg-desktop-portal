@@ -80,12 +80,12 @@ xdp_session_dex_handle_close (XdpDbusSession        *object,
 
   g_dbus_interface_skeleton_unexport (G_DBUS_INTERFACE_SKELETON (session));
   session->exported = FALSE;
-  xdp_context_unclaim_object_path (session->context, session->id);
 
   dex_await (xdp_dbus_impl_session_call_close_future (session->impl_session),
              &error);
 
   xdp_session_dex_emit_closed (session);
+  xdp_context_unclaim_object_path (session->context, session->id);
 
   if (error)
     {
