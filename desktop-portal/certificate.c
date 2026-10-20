@@ -1160,7 +1160,13 @@ handle_acquire_credential (XdpDbusExperimentalCertificate1 *object,
 
     /* A closed request must not leave a grant behind. */
     if (xdp_request_dex_is_closed (request))
-      return G_DBUS_METHOD_INVOCATION_HANDLED;
+      {
+        if (result &&
+            result->response == XDG_DESKTOP_PORTAL_RESPONSE_SUCCESS)
+          xdp_session_dex_close (grant->session);
+
+        return G_DBUS_METHOD_INVOCATION_HANDLED;
+      }
 
     if (!result)
       {

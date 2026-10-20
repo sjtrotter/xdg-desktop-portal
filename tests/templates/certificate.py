@@ -8,10 +8,10 @@ from dataclasses import dataclass
 
 import dbus
 import dbus.service
-from dbusmock import MOCK_IFACE
+from dbusmock import MOCK_IFACE, DBusMockObject
 from gi.repository import GLib
 
-from tests.templates.xdp_utils import ImplRequest, ImplSession, Response, init_logger
+from tests.templates.xdp_utils import ImplRequest, Response, init_logger
 
 BUS_NAME = "org.freedesktop.impl.portal.Test"
 MAIN_OBJ = "/org/freedesktop/portal/desktop"
@@ -49,11 +49,35 @@ class CertificateParameters:
     sign_delay: int
     hold: bool
     hold_sign: bool
+    hold_close: bool
     response: int
     expect_close: bool
     credential: dict
     signature: bytes
     capabilities: dict
+
+
+class CertificateSession(DBusMockObject):
+    @dbus.service.method(
+        "org.freedesktop.impl.portal.Session",
+        in_signature="",
+        out_signature="",
+        async_callbacks=("cb_success", "cb_error"),
+    )
+    def Close(self, cb_success, cb_error):
+        mock = self.mock_data
+        mock.grants.discard(self.path)
+        mock.sessions.remove(self.path)
+        mock.RemoveObject(self.path)
+        mock.EmitSignal(
+            "org.freedesktop.impl.portal.Mock", "SessionClosed", "s", [self.path]
+        )
+
+        if mock.certificate_params.hold_close:
+            mock.session_close_replies[self.path] = (cb_success, cb_error)
+            mock.EmitSignal(MOCK_IFACE, "SessionClosePending", "o", [self.path])
+        else:
+            cb_success()
 
 
 def load(mock, parameters=None):
@@ -67,6 +91,7 @@ def load(mock, parameters=None):
         sign_delay=parameters.get("sign-delay", parameters.get("delay", 0)),
         hold=parameters.get("hold", False),
         hold_sign=parameters.get("hold-sign", False),
+        hold_close=parameters.get("hold-close", False),
         response=parameters.get("response", 0),
         expect_close=parameters.get("expect-close", False),
         credential=parameters.get("credential", DEFAULT_CREDENTIAL),
@@ -82,7 +107,9 @@ def load(mock, parameters=None):
             }
         ),
     )
-    mock.sessions: dict[str, ImplSession] = {}
+    mock.sessions: set[str] = set()
+    mock.grants: set[str] = set()
+    mock.session_close_replies = {}
 
 
 @dbus.service.method(
@@ -95,8 +122,15 @@ def CreateSession(self, handle, session_handle, app_id, options, cb_success, cb_
     logger.debug(f"CreateSession({handle}, {session_handle}, {app_id}, {options})")
     params = self.certificate_params
 
-    session = ImplSession(self, BUS_NAME, session_handle, app_id).export()
-    self.sessions[session_handle] = session
+    self.AddObject(
+        session_handle,
+        "org.freedesktop.impl.portal.Session",
+        {},
+        [],
+        mock_class=CertificateSession,
+        mock_data=self,
+    )
+    self.sessions.add(session_handle)
 
     request = ImplRequest(self, BUS_NAME, handle, logger, cb_success, cb_error)
 
@@ -128,6 +162,8 @@ def AcquireCredential(
     if params.expect_close:
         request.wait_for_close()
     else:
+        if params.response == 0:
+            self.grants.add(session_handle)
 
         def done():
             self.EmitSignal(MOCK_IFACE, "AcquireCredentialDone", "o", [handle])
@@ -140,7 +176,13 @@ def AcquireCredential(
             )
 
         if params.hold:
-            self.acquire_credential_reply = reply
+            request._export()
+
+            def release():
+                request._unexport()
+                reply()
+
+            self.acquire_credential_reply = release
             self.AddMethod(
                 MOCK_IFACE,
                 "ReleaseAcquireCredential",
@@ -165,6 +207,7 @@ def Sign(
     params = self.certificate_params
 
     assert session_handle in self.sessions
+    assert session_handle in self.grants
 
     request = ImplRequest(self, BUS_NAME, handle, logger, cb_success, cb_error)
 
@@ -196,6 +239,24 @@ def GetCapabilities(self, app_id, options):
     logger.debug(f"GetCapabilities({app_id}, {options})")
 
     return dbus.Dictionary(self.certificate_params.capabilities, signature="sv")
+
+
+@dbus.service.method(MOCK_IFACE, in_signature="o", out_signature="b")
+def HasGrant(self, session_handle):
+    return session_handle in self.grants
+
+
+@dbus.service.method(MOCK_IFACE, in_signature="ob", out_signature="")
+def ReleaseSessionClose(self, session_handle, fail):
+    cb_success, cb_error = self.session_close_replies.pop(session_handle)
+    if fail:
+        cb_error(
+            dbus.exceptions.DBusException(
+                "Session close failed", name="org.freedesktop.DBus.Error.Failed"
+            )
+        )
+    else:
+        cb_success()
 
 
 @dbus.service.method(

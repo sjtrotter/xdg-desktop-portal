@@ -46,9 +46,9 @@ def required_templates():
     return {"certificate": {}}
 
 
-def create_session(dbus_con, intf):
+def create_session(dbus_con, intf, options=None):
     request = xdp.Request(dbus_con, intf)
-    response = request.call("CreateSession", options={})
+    response = request.call("CreateSession", options={} if options is None else options)
     assert response
     assert response.response == 0
     assert isinstance(response.results["session_handle"], dbus.ObjectPath)
@@ -491,6 +491,52 @@ class TestCertificate:
         assert excinfo.value.get_dbus_name() == "org.freedesktop.portal.Error.NotFound"
         assert "Invalid session" in excinfo.value.get_dbus_message()
 
+    @pytest.mark.parametrize("method", ("AcquireCredential", "Sign", "Close"))
+    def test_session_is_bound_to_the_connection(
+        self, portals, dbus_con, xdp_app_info, method
+    ):
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+        mock_intf = xdp.get_mock_iface(dbus_con)
+
+        session = create_session(dbus_con, intf)
+        assert acquire_credential(dbus_con, intf, session).response == 0
+
+        other = dbus.bus.BusConnection(os.environ["DBUS_SESSION_BUS_ADDRESS"])
+        try:
+            assert other.get_unique_name() != dbus_con.get_unique_name()
+            other_intf = xdp.get_iface(other, INTERFACE)
+            other_session = create_session(other, other_intf)
+            calls = mock_intf.GetMethodCalls("CreateSession")
+            assert len(calls) == 2
+            assert calls[0][1][2] == calls[1][1][2] == xdp_app_info.app_id
+
+            with pytest.raises(dbus.exceptions.DBusException) as excinfo:
+                if method == "AcquireCredential":
+                    acquire_credential(other, other_intf, session)
+                elif method == "Sign":
+                    sign(other, other_intf, session)
+                else:
+                    foreign_session = xdp.Session(other, session.handle)
+                    foreign_session.session_interface.Close()
+
+            if method == "Close":
+                expected_error = "org.freedesktop.DBus.Error.AccessDenied"
+            else:
+                expected_error = "org.freedesktop.portal.Error.NotFound"
+            assert excinfo.value.get_dbus_name() == expected_error
+            assert len(mock_intf.GetMethodCalls("AcquireCredential")) == 1
+            assert len(mock_intf.GetMethodCalls("Sign")) == 0
+            assert mock_intf.HasGrant(session.handle)
+            other_session.close()
+        finally:
+            other.close()
+
+        response = sign(dbus_con, intf, session)
+        assert response
+        assert response.response == 0
+        assert bytes(response.results["signature"]) == b"signature"
+        assert not session.closed
+
     @pytest.mark.parametrize(
         "template_params", ({"certificate": {"expect-close": True}},)
     )
@@ -603,8 +649,8 @@ class TestCertificate:
         assert first.response.response == 0
         assert len(mock_intf.GetMethodCalls("AcquireCredential")) == 1
 
-    @pytest.mark.parametrize("template_params", ({"certificate": {"delay": 300}},))
-    def test_closed_request_does_not_acquire_grant(self, portals, dbus_con):
+    @pytest.mark.parametrize("template_params", ({"certificate": {"hold": True}},))
+    def test_closed_acquisition_revokes_backend_grant(self, portals, dbus_con):
         intf = xdp.get_iface(dbus_con, INTERFACE)
         mock_intf = xdp.get_mock_iface(dbus_con)
 
@@ -618,22 +664,74 @@ class TestCertificate:
             "",
             {"handle_token": request.handle_token, "purpose": "client_auth"},
         )
+        xdp.wait_for(lambda: mock_intf.HasGrant(session.handle))
+        assert not completed
         request.close()
+        assert mock_intf.HasGrant(session.handle)
+        mock_intf.ReleaseAcquireCredential()
 
         xdp.wait_for(lambda: completed)
         assert completed == [request.handle]
-
-        def acquired():
-            response = acquire_credential(dbus_con, intf, session)
-            assert response
-            if response.response == 0:
-                return True
-            assert response.response == 2
-            assert response.results["reason"] == "grant_already_held"
-            return False
-
-        xdp.wait_for(acquired)
+        xdp.wait_for(lambda: session.closed)
+        xdp.wait_for(lambda: not mock_intf.HasGrant(session.handle))
         assert request.response is None
+
+        with pytest.raises(dbus.exceptions.DBusException) as excinfo:
+            sign(dbus_con, intf, session)
+        assert excinfo.value.get_dbus_name() == "org.freedesktop.portal.Error.NotFound"
+        assert len(mock_intf.GetMethodCalls("AcquireCredential")) == 1
+        assert len(mock_intf.GetMethodCalls("Sign")) == 0
+
+    @pytest.mark.parametrize(
+        "template_params", ({"certificate": {"hold-close": True}},)
+    )
+    @pytest.mark.parametrize("close_error", (False, True))
+    def test_session_token_reused_during_close(self, portals, dbus_con, close_error):
+        intf = xdp.get_iface(dbus_con, INTERFACE)
+        mock_intf = xdp.get_mock_iface(dbus_con)
+
+        first = create_session(
+            dbus_con, intf, options={"session_handle_token": "reused"}
+        )
+        pending = []
+        replies = []
+        errors = []
+        mock_intf.connect_to_signal("SessionClosePending", pending.append)
+        first.session_interface.Close(
+            reply_handler=lambda: replies.append(True), error_handler=errors.append
+        )
+        xdp.wait_for(lambda: pending or errors)
+        assert not errors
+        assert pending == [first.handle]
+        assert not replies
+
+        second = create_session(
+            dbus_con, intf, options={"session_handle_token": "reused"}
+        )
+        assert second.handle.startswith(first.handle + "/")
+        assert acquire_credential(dbus_con, intf, second).response == 0
+        assert not replies
+        assert not errors
+
+        mock_intf.ReleaseSessionClose(first.handle, close_error)
+        xdp.wait_for(lambda: replies or errors)
+        if close_error:
+            assert not replies
+            assert len(errors) == 1
+            assert errors[0].get_dbus_name() == "org.freedesktop.DBus.Error.Failed"
+        else:
+            assert replies == [True]
+            assert not errors
+
+        response = sign(dbus_con, intf, second)
+        assert response
+        assert response.response == 0
+        assert bytes(response.results["signature"]) == b"signature"
+
+        third = create_session(
+            dbus_con, intf, options={"session_handle_token": "reused"}
+        )
+        assert third.handle == first.handle
 
     def test_reused_session_path_has_no_grant(self, portals, dbus_con):
         intf = xdp.get_iface(dbus_con, INTERFACE)
